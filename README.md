@@ -1,62 +1,109 @@
-# Tutorly — Full-Stack Tutor Management App
+# TutorClock
 
-Tutorly is a production-ready Next.js (App Router) + PostgreSQL application designed for independent tutors to track tutoring time, manage student rosters, create payment requests, and export family-ready session summary reports.
+A trust-first time tracker for private tutors. Run a timer during a lesson,
+then send the parent a session summary they can trust — because the log shows
+everything, including your honest corrections.
 
----
-
-## 🚀 How to Launch This Application in Real Production
-
-To launch this app on the internet with your own domain so families and tutors can use it, you need two things: **a hosted PostgreSQL database** and **a Node.js web server / cloud host** for the Next.js frontend and backend APIs.
-
-### 1. Hosted PostgreSQL Database (Free or Paid)
-The app stores users, students, sessions, and payment requests in PostgreSQL via Drizzle ORM.
-Recommended cloud database providers:
-- **[Neon](https://neon.tech/)** *(Serverless PostgreSQL – free tier available)*
-- **[Supabase](https://supabase.com/)** *(PostgreSQL – free tier available)*
-- **[Railway](https://railway.app/)** *(PostgreSQL database addon)*
-- **[Render](https://render.com/)** *(Managed PostgreSQL)*
-
-When you create your database, copy your connection string URL (it looks like `postgresql://user:password@hostname:5432/dbname?sslmode=require`).
+**Status: Step 1 of 7 — students, stored.**
 
 ---
 
-### 2. Cloud Application Hosting (Next.js Frontend + Backend API)
-Because Next.js has built-in API routes (`src/app/api/`), **your frontend and backend are hosted together in a single deployment**. You do **not** need a separate backend server.
+## Running it
 
-#### Option A: Deploy on Vercel (Easiest for Next.js)
-1. Push this project repository to **GitHub**, **GitLab**, or **Bitbucket**.
-2. Sign in to [Vercel](https://vercel.com/) and click **Add New -> Project**, then import your Git repository.
-3. Under **Environment Variables**, add:
-   - `DATABASE_URL`: Your PostgreSQL connection string from Neon / Supabase / Railway.
-   - `AUTH_SECRET`: A secure random 32+ character string (e.g. generated via `openssl rand -hex 32`) to sign authentication cookies.
-4. Click **Deploy**. Vercel will build and launch your full-stack app automatically with a free HTTPS domain (`your-app.vercel.app`).
-5. Run your database schema push against your production database:
-   ```bash
-   DATABASE_URL="your_production_connection_string" npx drizzle-kit push
-   ```
+There is no build step and nothing to install. But the app should be served
+over `http://`, not opened as a file, because the offline/installable part
+(the service worker) only works on a real address.
 
-#### Option B: Deploy on Railway or Render (Container / VPS Hosting)
-1. Import your GitHub repository into [Railway](https://railway.app/) or [Render](https://render.com/).
-2. Add a **PostgreSQL Database service** in the same workspace.
-3. In your app’s environment variables, set:
-   - `DATABASE_URL`: The internal or external database connection URL provided by Railway/Render.
-   - `AUTH_SECRET`: A secure random secret string.
-   - `NODE_ENV`: `production`
-4. Set the build command to `npm run build` and start command to `npm run start`.
-5. Run `npx drizzle-kit push` once after deploying to initialize your production tables.
+From this folder:
 
----
+```bash
+python3 -m http.server 8000
+```
 
-## 🛠️ Local Development & Commands
+Then open <http://localhost:8000> in your browser.
 
-- **Run Dev Server:** `npm run dev`
-- **Apply Database Schema:** `npx drizzle-kit push`
-- **Typecheck:** `npm run typecheck`
-- **Production Build:** `npm run build`
+To try it on your phone, make sure the phone is on the same Wi-Fi, find your
+computer's local IP address, and visit `http://<that-ip>:8000`.
 
-## 📦 Project Structure
+## Checking that data really survives
 
-- `src/db/schema.ts` — Drizzle PostgreSQL table definitions (`users`, `students`, `tutoring_sessions`, `payment_requests`).
-- `src/lib/auth.ts` — Cookie-based authentication, password hashing, and demo data seeding.
-- `src/app/api/*` — Backend REST API routes for authentication, dashboard metrics, CRUD flows, and CSV report export.
-- `src/app/page.tsx` — Full-featured interactive UI (tutor clock, student cards, session history, payment requests, report preview).
+This is the whole point of Step 1, so it is worth testing properly:
+
+1. Add two or three students with different names, rates and colours.
+2. **Fully quit the browser** — not just the tab. Reopen it and go back to
+   the address. Your students should still be listed.
+3. Harder test: stop the `python3 -m http.server` process, start it again,
+   and reload. Still there. This proves the data lives on your device and
+   has nothing to do with the server.
+
+Data is stored under the key `tutorclock.v1` in your browser's localStorage.
+Note that it is per-browser and per-device — clearing your browsing data
+will clear it too. Real backup/export arrives with the summary step.
+
+## What works now
+
+- Add a student: name, hourly rate in ETB, and a colour for their initial
+- Edit any student by tapping their row
+- Archive a student to hide them from the main list without deleting anything
+- Everything persists to the device and survives a restart
+- Installs to a phone home screen and opens offline
+
+Not built yet, in build-plan order: the live timer (Step 2), session history
+and manual entry (Step 3), the edit/trust trail (Step 4), and the summary
+export (Step 5).
+
+## How it is put together
+
+```
+index.html              the page shell
+css/tutorclock.css      design system, harvested from the old app's CSS
+js/store.js             the ONLY file that touches localStorage
+js/app.js               screens and interaction
+manifest.webmanifest    makes it installable
+service-worker.js       makes it work offline
+icons/                  app icons
+reference/              the old Next.js app and the prototypes — not built,
+                        kept only for reference
+```
+
+### Choices worth knowing
+
+**No framework, no build step.** Plain HTML, CSS and JavaScript. Nothing to
+install to run it, nothing to break, and the whole app can be read top to
+bottom. The prototype was written in React, but it was a design sketch for
+the *flow* — the flow is what was carried over, not the framework.
+
+**Tailwind was stripped.** The harvested CSS opened with
+`@import "tailwindcss"`, but nothing in that file actually used Tailwind —
+every rule was hand-written. Dropping the import removed an entire build
+step and changed nothing visually.
+
+**localStorage, behind a wall.** Only `js/store.js` touches storage. Every
+screen asks it for data. If this ever outgrows localStorage, that one file
+gets rewritten and the screens do not change.
+
+**Phone-first CSS.** The harvested stylesheet was a desktop sidebar dashboard
+that shrank down. This one inverts that: the base styles are the phone
+styles, and a single media query widens the column on a desktop. The sidebar,
+the multi-column grids, the chart, the login page and the payment list were
+all dropped.
+
+## The rules this app is built on
+
+From Section 5 of the build plan. They are what make this more than a
+stopwatch, and they are not negotiable as the app grows:
+
+1. Every session records how it was created: `live` (timer run) or `manual`
+   (typed in afterwards). These never become indistinguishable.
+2. Editing never overwrites silently. Every edit appends a record — old
+   value, new value, timestamp, optional reason. Nothing is erased.
+3. Pauses are part of the record. Billable time = elapsed − paused.
+4. The parent-facing summary shows edited and manual sessions honestly.
+5. The timer survives the app closing, the phone locking, or a crash —
+   elapsed time is computed from a stored start timestamp, never from a
+   counter that only ticks while the app is open.
+
+Student details are the one thing that *is* a plain overwrite, and that is
+deliberate: a name or an hourly rate is just a current fact about a person.
+The append-only trail applies to sessions, which are the record a parent is
+asked to trust.
