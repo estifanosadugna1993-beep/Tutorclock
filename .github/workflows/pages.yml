@@ -1,0 +1,56 @@
+# Publishes TutorClock to GitHub Pages automatically.
+#
+# Why this exists: setting up Pages through Settings -> Pages means
+# picking a branch from a dropdown and pressing Save, which is fiddly.
+# With this file you instead set Source = "GitHub Actions" once, and
+# every push republishes the site on its own.
+
+name: Deploy TutorClock to Pages
+
+on:
+  push:
+    branches:
+      - claude/tutorclock-app-build-ods6b3
+      - main
+  # Lets you re-run it by hand from the Actions tab.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# If two pushes land close together, let the newer one win.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Get the code
+        uses: actions/checkout@v4
+
+      - name: Set up Pages
+        uses: actions/configure-pages@v5
+
+      # Publish only the app itself. The reference/ folder holds the
+      # old Next.js app and the prototypes, which nobody needs served.
+      - name: Collect the app files
+        run: |
+          mkdir -p _site
+          cp -r index.html css js icons manifest.webmanifest service-worker.js _site/
+          ls -R _site
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Publish
+        id: deployment
+        uses: actions/deploy-pages@v4
