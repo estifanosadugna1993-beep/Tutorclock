@@ -14,7 +14,11 @@
    away the old cache on the next load.
    ============================================================ */
 
-const CACHE_NAME = 'tutorclock-v1';
+/* Bump this on every step. The activate handler deletes any cache
+   whose name does not match, so changing it is what throws away
+   the previous step's files. Forgetting to change it means an old
+   version can keep being served from the cache. */
+const CACHE_NAME = 'tutorclock-step2';
 
 const APP_SHELL = [
   './',
