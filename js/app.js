@@ -22,6 +22,15 @@ import {
   updateStudent,
   suggestColor,
   isStorageBroken,
+  getActive,
+  netSecondsOf,
+  isPaused,
+  startSession,
+  pauseSession,
+  resumeSession,
+  stopSession,
+  discardSession,
+  weekSecondsFor,
   STUDENT_COLORS,
   DEFAULT_CURRENCY,
 } from './store.js';
@@ -55,6 +64,33 @@ function money(amount, currency = DEFAULT_CURRENCY) {
   return `${currency} ${amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 }
 
+/* The big ticking clock: 5:03 under an hour, 1:05:03 over it. */
+function clockText(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const seconds = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${minutes}:${pad(seconds)}`;
+}
+
+/* A settled duration, for lists and totals: "1h 05m" or "45m". */
+function durationText(totalSeconds) {
+  const s = Math.max(0, Math.floor(totalSeconds));
+  const hours = Math.floor(s / 3600);
+  const minutes = Math.round((s % 3600) / 60);
+  if (hours > 0) return `${hours}h ${String(minutes).padStart(2, '0')}m`;
+  return `${minutes}m`;
+}
+
+/* Clock time like 14:32, for the "started at" line. */
+function timeOfDay(timestamp) {
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 /* Inline SVG icons, so the app needs no icon font and no network. */
 const icon = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
@@ -63,6 +99,9 @@ const icon = {
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>',
   people: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6L9 17l-5-5"/></svg>',
+  play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.87l11-6.5a1 1 0 0 0 0-1.74l-11-6.5A1 1 0 0 0 8 5.5z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>',
+  stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
 };
 
 /* ------------------------------------------------------------
@@ -110,12 +149,18 @@ function go(next) {
 }
 
 function render() {
+  // If the timer screen is showing but nothing is running any more,
+  // fall back to the dashboard rather than rendering an empty screen.
+  if (screen.name === 'timer' && !getActive()) screen = { name: 'dashboard' };
+
   if (screen.name === 'dashboard') app.innerHTML = Dashboard();
   else if (screen.name === 'addStudent') app.innerHTML = StudentForm(null);
   else if (screen.name === 'editStudent') app.innerHTML = StudentForm(getStudent(screen.id));
+  else if (screen.name === 'timer') app.innerHTML = TimerScreen();
   else app.innerHTML = Dashboard();
 
   wireUp();
+  tickClocks(); // paint the clocks immediately, don't wait for the first tick
 }
 
 /* ------------------------------------------------------------
@@ -125,11 +170,12 @@ function render() {
 function Dashboard() {
   const students = listStudents();
   const archived = listArchivedStudents();
+  const active = getActive();
 
   const warning = isStorageBroken()
     ? `<div class="empty" style="padding:14px 0 0">
          <p style="color:var(--danger);max-width:none">
-           This browser is blocking storage, so students will not
+           This browser is blocking storage, so your work will not
            survive a restart. Try a normal (non-private) window.
          </p>
        </div>`
@@ -139,13 +185,13 @@ function Dashboard() {
     ? `<div class="empty">
          <span>${icon.people}</span>
          <h3>No students yet</h3>
-         <p>Add the first student you tutor. Their hourly rate turns
-            logged time into an amount later on.</p>
+         <p>Add the first student you tutor, then tap Start when
+            your lesson begins.</p>
        </div>`
-    : `<div class="student-list">${students.map(studentRow).join('')}</div>
+    : `<div class="student-list">${students.map((s) => studentRow(s, active)).join('')}</div>
        ${archived.length ? `
          <div class="list-heading">Archived</div>
-         <div class="student-list">${archived.map(studentRow).join('')}</div>
+         <div class="student-list">${archived.map((s) => studentRow(s, active)).join('')}</div>
        ` : ''}`;
 
   return `
@@ -162,6 +208,7 @@ function Dashboard() {
 
       <div class="screen-body">
         ${warning}
+        ${active ? liveBanner(active) : ''}
         ${body}
       </div>
 
@@ -174,23 +221,155 @@ function Dashboard() {
   `;
 }
 
-function studentRow(student) {
+/* The pinned "a session is running" bar. The build plan asks for
+   this so a forgotten timer is impossible to miss. */
+function liveBanner(active) {
+  const student = getStudent(active.studentId);
+  if (!student) return '';
+  const paused = isPaused(active);
+
+  return `
+    <button class="live-banner ${paused ? 'is-paused' : ''}" data-action="open-timer">
+      <span class="live-dot"></span>
+      <span class="live-text">
+        <b>${paused ? 'Paused' : 'Session running'}</b>
+        <small>${esc(student.name)}</small>
+      </span>
+      <span class="live-clock" data-clock>${clockText(netSecondsOf(active))}</span>
+    </button>
+  `;
+}
+
+function studentRow(student, active) {
+  const isRunning = Boolean(active && active.studentId === student.id);
+  const someoneElseRunning = Boolean(active && !isRunning);
+
+  const week = weekSecondsFor(student.id);
   const rate = student.hourlyRate > 0
     ? `${money(student.hourlyRate, student.currency)}/hr`
     : 'No rate set';
+  const weekText = week > 0 ? `${durationText(week)} this week` : 'Nothing this week';
 
   return `
-    <button class="student-row" data-action="edit-student" data-id="${esc(student.id)}">
-      <span class="avatar" style="background:${esc(student.color)}">
-        ${esc(initialOf(student.name))}
-      </span>
-      <span class="row-text">
-        <b>${esc(student.name)}</b>
-        <small>${esc(rate)}</small>
-      </span>
+    <div class="student-row ${isRunning ? 'is-running' : ''}">
+      <button class="row-main" data-action="edit-student" data-id="${esc(student.id)}">
+        <span class="avatar" style="background:${esc(student.color)}">
+          ${esc(initialOf(student.name))}
+        </span>
+        <span class="row-text">
+          <b>${esc(student.name)}</b>
+          <small>${esc(weekText)} &middot; ${esc(rate)}</small>
+        </span>
+      </button>
+
       ${student.archived ? '<span class="status archived">Archived</span>' : ''}
-      <span class="chevron">${icon.chevron}</span>
-    </button>
+
+      <button class="start-btn ${isRunning ? 'is-running' : ''}"
+              data-action="${isRunning ? 'open-timer' : 'start-session'}"
+              data-id="${esc(student.id)}"
+              ${someoneElseRunning ? 'disabled' : ''}>
+        ${isRunning ? 'Open' : 'Start'}
+      </button>
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen 2 — Live timer (the core moment)
+   ------------------------------------------------------------
+   Note what is NOT here: any variable holding "seconds so far".
+   The clock is drawn from netSecondsOf(), which recalculates from
+   the stored start timestamp every time. That is the whole reason
+   the timer survives the phone locking or the app being killed.
+   ------------------------------------------------------------ */
+
+/* True while the "End this session?" panel is open. */
+let confirmingStop = false;
+
+function TimerScreen() {
+  const active = getActive();
+  const student = getStudent(active.studentId);
+  const paused = isPaused(active);
+  const net = netSecondsOf(active);
+
+  const pauseCount = active.pauses.length;
+  const pauseNote = pauseCount > 0
+    ? `${pauseCount} break${pauseCount === 1 ? '' : 's'} &middot; not billed`
+    : '';
+
+  const earned = student.hourlyRate > 0
+    ? `<p class="timer-earned" data-amount>${esc(money((net / 3600) * student.hourlyRate, student.currency))} so far</p>`
+    : '';
+
+  return `
+    <div class="screen timer-screen ${paused ? 'is-paused' : ''}">
+      <header class="app-header">
+        <button class="back-button" data-action="go-dashboard" aria-label="Back to students">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>${esc(student.name)}</h1>
+          <p>Started ${esc(timeOfDay(active.startedAt))}</p>
+        </div>
+      </header>
+
+      <div class="screen-body timer-body">
+        <span class="avatar avatar-xl" style="background:${esc(student.color)}">
+          ${esc(initialOf(student.name))}
+        </span>
+
+        <div class="big-clock" data-clock aria-live="off">${clockText(net)}</div>
+
+        <div class="timer-status">
+          ${paused ? '' : '<span class="live-dot"></span>'}
+          ${paused ? 'PAUSED' : 'RUNNING'}
+        </div>
+
+        ${earned}
+        ${pauseNote ? `<p class="timer-breaks">${pauseNote}</p>` : ''}
+      </div>
+
+      ${confirmingStop ? stopPanel(student, net, active) : ''}
+
+      <div class="screen-actions">
+        ${confirmingStop ? '' : `
+          <div class="timer-controls">
+            <button class="pause-btn" data-action="toggle-pause">
+              ${paused ? icon.play : icon.pause}
+              ${paused ? 'Resume' : 'Pause'}
+            </button>
+            <button class="stop-btn" data-action="ask-stop">
+              ${icon.stop} Stop
+            </button>
+          </div>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+/* The "are you sure" step when stopping. Shows start and end time
+   so a session you forgot to stop is obvious before you save it. */
+function stopPanel(student, net, active) {
+  return `
+    <div class="stop-panel">
+      <b>End this session?</b>
+      <p><strong data-duration>${esc(durationText(net))}</strong> will be saved for ${esc(student.name)}.</p>
+      <p class="stop-times">
+        ${esc(timeOfDay(active.startedAt))} &rarr; ${esc(timeOfDay(Date.now()))}
+      </p>
+
+      <label class="field-label">
+        <span>Note <span class="label-note">(optional)</span></span>
+        <input class="field" id="note" placeholder="e.g. Algebra ch.4" maxlength="120">
+      </label>
+
+      <div class="stop-actions">
+        <button class="primary" data-action="confirm-stop">Save session</button>
+        <button class="secondary" data-action="cancel-stop">Keep going</button>
+        <button class="text-button danger" data-action="discard">Discard without saving</button>
+      </div>
+    </div>
   `;
 }
 
@@ -286,6 +465,57 @@ function StudentForm(student) {
 }
 
 /* ------------------------------------------------------------
+   The ticking
+   ------------------------------------------------------------
+   This ONLY rewrites the text inside the clock elements. It never
+   re-renders the screen, because doing that four times a second
+   would wipe out whatever you were typing in the note box and
+   steal focus mid-keystroke.
+
+   The interval is not the source of truth for elapsed time - it
+   just decides how often we re-read the real clock.
+   ------------------------------------------------------------ */
+
+function tickClocks() {
+  const active = getActive();
+  if (!active) return;
+
+  const net = netSecondsOf(active);
+  const student = getStudent(active.studentId);
+
+  document.querySelectorAll('[data-clock]').forEach((el) => {
+    const next = clockText(net);
+    if (el.textContent !== next) el.textContent = next;
+  });
+
+  const amount = document.querySelector('[data-amount]');
+  if (amount && student && student.hourlyRate > 0) {
+    const next = `${money((net / 3600) * student.hourlyRate, student.currency)} so far`;
+    if (amount.textContent !== next) amount.textContent = next;
+  }
+
+  // While the confirm panel is open, keep its duration honest too -
+  // the lesson is still running until you actually press save.
+  const duration = document.querySelector('[data-duration]');
+  if (duration) {
+    const next = durationText(net);
+    if (duration.textContent !== next) duration.textContent = next;
+  }
+}
+
+setInterval(tickClocks, 250);
+
+/* Phones aggressively freeze background tabs, so the interval may
+   not have run while the screen was off. Recompute the moment we
+   become visible again - the numbers jump straight to correct
+   because they come from timestamps, not from a counter. */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) tickClocks();
+});
+window.addEventListener('focus', tickClocks);
+window.addEventListener('pageshow', tickClocks);
+
+/* ------------------------------------------------------------
    Wiring — attach behaviour after every render
    ------------------------------------------------------------ */
 
@@ -304,13 +534,42 @@ function wireUp() {
     } else if (action === 'edit-student') {
       draftColor = null;
       go({ name: 'editStudent', id: trigger.dataset.id });
-    } else if (action === 'cancel') {
+    } else if (action === 'cancel' || action === 'go-dashboard') {
       draftColor = null;
       go({ name: 'dashboard' });
     } else if (action === 'save') {
       saveStudent();
+
+    // ---- timer ----
+    } else if (action === 'start-session') {
+      const result = startSession(trigger.dataset.id);
+      if (!result.ok) { toast(result.error); return; }
+      confirmingStop = false;
+      go({ name: 'timer' });
+    } else if (action === 'open-timer') {
+      confirmingStop = false;
+      go({ name: 'timer' });
+    } else if (action === 'toggle-pause') {
+      const active = getActive();
+      const result = isPaused(active) ? resumeSession() : pauseSession();
+      if (!result.ok) { toast(result.error); return; }
+      render();
+    } else if (action === 'ask-stop') {
+      confirmingStop = true;
+      render();
+    } else if (action === 'cancel-stop') {
+      confirmingStop = false;
+      render();
+    } else if (action === 'confirm-stop') {
+      finishSession();
+    } else if (action === 'discard') {
+      discardActiveSession();
     }
   };
+
+  // Focus the note box as soon as the confirm panel opens.
+  const note = document.getElementById('note');
+  if (note) note.focus();
 
   const form = document.getElementById('student-form');
   if (!form) return;
@@ -397,6 +656,43 @@ function saveStudent() {
   } else {
     toast(`${result.student.name} added`);
   }
+}
+
+/* Stop the timer and save the lesson. */
+function finishSession() {
+  const noteInput = document.getElementById('note');
+  const result = stopSession(noteInput ? noteInput.value : '');
+
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  const student = getStudent(result.session.studentId);
+  confirmingStop = false;
+  go({ name: 'dashboard' });
+  toast(`${durationText(result.session.netSeconds)} saved for ${student ? student.name : 'student'}`);
+}
+
+/* Throw away a timer started by mistake. Asks first, because
+   unlike an edit this really does leave no record. */
+function discardActiveSession() {
+  const active = getActive();
+  const net = active ? netSecondsOf(active) : 0;
+
+  const sure = window.confirm(
+    `Discard this session?\n\n${durationText(net)} will not be saved, and there will be no record of it.`
+  );
+  if (!sure) return;
+
+  const result = discardSession();
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+  confirmingStop = false;
+  go({ name: 'dashboard' });
+  toast('Session discarded');
 }
 
 /* ------------------------------------------------------------

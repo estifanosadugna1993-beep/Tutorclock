@@ -176,21 +176,54 @@ button { cursor: pointer; }
 .student-row {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 10px;
   width: 100%;
-  padding: 14px;
-  text-align: left;
+  padding: 10px 12px 10px 10px;
   border: 1px solid #eae9f1;
   background: #fff;
   border-radius: var(--radius);
   box-shadow: 0 3px 12px #2d29450a;
   color: inherit;
-  transition: transform 0.12s, box-shadow 0.12s;
 }
-.student-row:active {
-  transform: scale(0.99);
-  box-shadow: 0 1px 6px #2d29450f;
+.student-row.is-running {
+  border-color: #f3c3ae;
+  box-shadow: 0 3px 14px #ed825c1f;
 }
+
+/* The tappable part of the row: opens the student. */
+.row-main {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  padding: 4px;
+  text-align: left;
+  color: inherit;
+  border-radius: 11px;
+  transition: transform 0.12s;
+}
+.row-main:active { transform: scale(0.98); }
+
+/* The Start button. Deliberately the loudest thing on the row -
+   this is the one control used mid-lesson with a kid waiting. */
+.start-btn {
+  flex: none;
+  border: 0;
+  border-radius: 11px;
+  background: var(--purple);
+  color: #fff;
+  font-weight: 750;
+  font-size: 14px;
+  padding: 0 17px;
+  height: 44px;
+  transition: background 0.2s, opacity 0.2s;
+}
+.start-btn:hover:not(:disabled) { background: var(--purple-dark); }
+.start-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+.start-btn.is-running { background: var(--orange); }
 
 /* the coloured initial — harvested .person > span, made bigger for thumbs */
 .avatar {
@@ -239,6 +272,179 @@ button { cursor: pointer; }
   color: #a4a1af;
   margin: 22px 0 10px;
 }
+
+/* ============================================================
+   The live session banner (pinned on the dashboard)
+   ------------------------------------------------------------
+   Amber, not purple. The build plan asks for a running timer to
+   be impossible to mistake for a stopped one, so "running" gets
+   the one warm colour in the whole app and nothing else uses it.
+   ============================================================ */
+
+.live-banner {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  width: 100%;
+  padding: 14px;
+  margin-bottom: 14px;
+  border: 1px solid #f3c3ae;
+  background: #fff5f0;
+  border-radius: var(--radius);
+  color: inherit;
+  text-align: left;
+}
+.live-banner.is-paused {
+  border-color: var(--line);
+  background: #f4f3f8;
+}
+
+.live-banner .live-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.live-banner b {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  color: var(--orange);
+}
+.live-banner.is-paused b { color: var(--muted); }
+.live-banner small {
+  font-size: 14px;
+  font-weight: 650;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.live-clock {
+  font-size: 20px;
+  font-weight: 750;
+  color: var(--orange);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.live-banner.is-paused .live-clock { color: var(--muted); }
+
+/* The pulsing dot. Same idea as the harvested .live i, in amber. */
+.live-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--orange);
+  flex: none;
+  animation: pulse 1.7s infinite;
+}
+
+@keyframes pulse {
+  0%   { box-shadow: 0 0 0 0 #ed825c99; }
+  70%  { box-shadow: 0 0 0 9px #ed825c00; }
+  100% { box-shadow: 0 0 0 0 #ed825c00; }
+}
+
+/* ============================================================
+   Timer screen
+   ============================================================ */
+
+.timer-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 6px;
+}
+
+.big-clock {
+  font-size: clamp(52px, 17vw, 68px);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: var(--orange);
+  margin: 18px 0 2px;
+  line-height: 1;
+  transition: color 0.3s;
+}
+.timer-screen.is-paused .big-clock { color: #9d9ab0; }
+
+.timer-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--orange);
+}
+.timer-screen.is-paused .timer-status { color: var(--muted); }
+
+.timer-earned {
+  margin: 14px 0 0;
+  font-size: 14px;
+  color: var(--ink-soft);
+  font-weight: 650;
+}
+.timer-breaks {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Pause and Stop, side by side and big enough to hit without
+   looking away from the student. */
+.timer-controls { display: flex; gap: 10px; }
+
+.pause-btn,
+.stop-btn {
+  flex: 1;
+  height: 58px;
+  border-radius: 14px;
+  font-weight: 750;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+}
+.pause-btn svg,
+.stop-btn svg { width: 17px; }
+
+.pause-btn {
+  border: 1px solid #dedde8;
+  background: #fff;
+  color: var(--ink-soft);
+}
+.stop-btn {
+  border: 0;
+  background: #e95f59;
+  color: #fff;
+}
+
+/* The confirm-before-saving panel */
+.stop-panel {
+  flex: none;
+  margin: 0 16px 12px;
+  padding: 16px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+}
+.stop-panel > b { font-size: 15px; }
+.stop-panel > p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+.stop-panel strong { color: var(--ink); }
+.stop-panel .stop-times {
+  margin-top: 2px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.stop-panel .field-label { margin-top: 14px; }
+.stop-actions { display: grid; gap: 9px; margin-top: 14px; }
 
 /* ============================================================
    Buttons — harvested .primary / .secondary

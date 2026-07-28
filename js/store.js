@@ -11,7 +11,8 @@
      {
        version:  1,
        students: [ Student, ... ],
-       sessions: [ ]            // filled in from Step 2 onward
+       sessions: [ Session, ... ],
+       active:   ActiveSession | null
      }
 
    Student (from Section 3 of the build plan):
@@ -23,6 +24,34 @@
      createdAt  timestamp
      updatedAt  timestamp
      archived   boolean - hide an old student without deleting
+
+   Session (a finished lesson):
+     id         unique id
+     studentId  -> Student.id
+     startedAt  timestamp the timer first started
+     endedAt    timestamp it stopped
+     pauses     [ { pausedAt, resumedAt } ]
+     netSeconds elapsed minus paused - the billable time
+     entryType  'live' (timer run) | 'manual' (typed in later)
+     note       optional freeform text
+     edits      [ Edit ]  - the trust trail, filled from Step 4
+     locked     true once included in a shared summary
+
+   ActiveSession (the one currently running, if any):
+     studentId, startedAt, pauses, paused
+
+   ---------------------------------------------------------------
+   THE CRASH-SAFETY RULE (build plan, Section 4, Screen 2)
+   ---------------------------------------------------------------
+   A running timer is stored as a START TIMESTAMP, never as a
+   counter that ticks. Elapsed time is always recalculated as
+
+       now - startedAt - (time spent paused)
+
+   so closing the app, locking the phone, or crashing loses
+   nothing: whenever we come back, we subtract again from the
+   real clock and get the right answer. Nothing in this file may
+   ever "add one second" to a stored total.
    ============================================================ */
 
 const STORAGE_KEY = 'tutorclock.v1';
@@ -57,7 +86,7 @@ function newId() {
 }
 
 function emptyData() {
-  return { version: SCHEMA_VERSION, students: [], sessions: [] };
+  return { version: SCHEMA_VERSION, students: [], sessions: [], active: null };
 }
 
 /* ------------------------------------------------------------
@@ -95,6 +124,7 @@ function readFromDisk() {
       version: parsed.version || SCHEMA_VERSION,
       students: Array.isArray(parsed.students) ? parsed.students : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+      active: isUsableActive(parsed.active) ? parsed.active : null,
     };
   } catch (err) {
     // The stored JSON is corrupt. Do NOT wipe it - keep a copy
@@ -254,4 +284,218 @@ function normaliseRate(value) {
   const n = Number.parseFloat(value);
   if (!Number.isFinite(n) || n < 0) return 0;
   return Math.round(n * 100) / 100; // keep at most 2 decimal places
+}
+
+/* ============================================================
+   The running timer
+   ============================================================ */
+
+/* A stored active session is only usable if it still makes sense:
+   it needs a start time and a student who still exists. Anything
+   malformed is dropped rather than crashing the app on startup. */
+function isUsableActive(active) {
+  return Boolean(
+    active &&
+    typeof active.studentId === 'string' &&
+    typeof active.startedAt === 'number' &&
+    Number.isFinite(active.startedAt) &&
+    Array.isArray(active.pauses)
+  );
+}
+
+/** The session currently running or paused, or null. */
+export function getActive() {
+  ensureLoaded();
+  // If the student was somehow removed, don't strand a timer.
+  if (data.active && !getStudent(data.active.studentId)) return null;
+  return data.active;
+}
+
+/**
+ * Total seconds spent paused so far. A pause that has not been
+ * resumed yet is still counting, so it runs up to `at`.
+ */
+function pausedMsOf(active, at) {
+  let total = 0;
+  for (const p of active.pauses) {
+    const from = p.pausedAt;
+    const to = p.resumedAt === null || p.resumedAt === undefined ? at : p.resumedAt;
+    if (Number.isFinite(from) && Number.isFinite(to) && to > from) total += to - from;
+  }
+  return total;
+}
+
+/**
+ * The billable seconds of a running session: elapsed minus paused.
+ *
+ * This is recomputed from timestamps every single time it is asked
+ * for - that is what makes the timer survive the app closing.
+ *
+ * Clamped at 0 because the device clock can move backwards (a time
+ * sync, or the tutor changing the phone's clock). Better to show
+ * 0:00 briefly than a negative lesson.
+ */
+export function netSecondsOf(active, at = Date.now()) {
+  if (!active) return 0;
+  const elapsed = at - active.startedAt - pausedMsOf(active, at);
+  return Math.max(0, Math.floor(elapsed / 1000));
+}
+
+/** Is the timer currently paused? */
+export function isPaused(active) {
+  if (!active || active.pauses.length === 0) return false;
+  const last = active.pauses[active.pauses.length - 1];
+  return last.resumedAt === null || last.resumedAt === undefined;
+}
+
+/**
+ * Start timing a lesson. Only one session may run at a time -
+ * two timers going at once would make the log meaningless.
+ */
+export function startSession(studentId) {
+  ensureLoaded();
+
+  if (data.active) return { ok: false, error: 'A session is already running.' };
+  if (!getStudent(studentId)) return { ok: false, error: 'That student no longer exists.' };
+
+  const previous = data.active;
+  data.active = { studentId, startedAt: Date.now(), pauses: [] };
+
+  if (!writeToDisk()) {
+    data.active = previous;
+    // If we cannot write the start time down, we cannot promise the
+    // session survives a crash - so refuse rather than pretend.
+    return { ok: false, error: 'Could not start: this device is not saving data.' };
+  }
+  return { ok: true, active: data.active };
+}
+
+/** Pause the running session. */
+export function pauseSession() {
+  ensureLoaded();
+  if (!data.active) return { ok: false, error: 'Nothing is running.' };
+  if (isPaused(data.active)) return { ok: true, active: data.active };
+
+  data.active.pauses.push({ pausedAt: Date.now(), resumedAt: null });
+
+  if (!writeToDisk()) {
+    data.active.pauses.pop();
+    return { ok: false, error: 'Could not save the pause.' };
+  }
+  return { ok: true, active: data.active };
+}
+
+/** Resume a paused session. */
+export function resumeSession() {
+  ensureLoaded();
+  if (!data.active) return { ok: false, error: 'Nothing is running.' };
+  if (!isPaused(data.active)) return { ok: true, active: data.active };
+
+  const last = data.active.pauses[data.active.pauses.length - 1];
+  last.resumedAt = Date.now();
+
+  if (!writeToDisk()) {
+    last.resumedAt = null;
+    return { ok: false, error: 'Could not save the resume.' };
+  }
+  return { ok: true, active: data.active };
+}
+
+/**
+ * Stop the timer and save it as a finished 'live' session.
+ * Trust rule R1: entryType records that this was really clocked,
+ * and it never changes afterwards.
+ */
+export function stopSession(note = '') {
+  ensureLoaded();
+  if (!data.active) return { ok: false, error: 'Nothing is running.' };
+
+  const active = data.active;
+  const endedAt = Date.now();
+
+  // Close an open pause at the moment we stop, so the record has
+  // no dangling half-pause in it.
+  const pauses = active.pauses.map((p) => ({
+    pausedAt: p.pausedAt,
+    resumedAt: p.resumedAt === null || p.resumedAt === undefined ? endedAt : p.resumedAt,
+  }));
+
+  const session = {
+    id: newId(),
+    studentId: active.studentId,
+    startedAt: active.startedAt,
+    endedAt,
+    pauses,
+    netSeconds: netSecondsOf(active, endedAt),   // R5: elapsed minus paused
+    entryType: 'live',                            // R1: really clocked
+    note: String(note || '').trim(),
+    edits: [],                                    // R2: the trust trail
+    locked: false,                                // R4: set when shared
+  };
+
+  data.sessions.push(session);
+  data.active = null;
+
+  if (!writeToDisk()) {
+    // Put everything back so nothing is silently lost.
+    data.sessions.pop();
+    data.active = active;
+    return { ok: false, error: 'Could not save the session.' };
+  }
+  return { ok: true, session };
+}
+
+/**
+ * Throw away a running session without saving it.
+ * Used only for a timer started by mistake.
+ */
+export function discardSession() {
+  ensureLoaded();
+  const previous = data.active;
+  data.active = null;
+  if (!writeToDisk()) {
+    data.active = previous;
+    return { ok: false, error: 'Could not discard the session.' };
+  }
+  return { ok: true };
+}
+
+/* ============================================================
+   Reading sessions
+   ============================================================ */
+
+/** Finished sessions for one student, newest first. */
+export function sessionsFor(studentId) {
+  ensureLoaded();
+  return data.sessions
+    .filter((s) => s.studentId === studentId)
+    .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/** Midnight on Monday of the current week, as a timestamp. */
+export function startOfWeek(at = Date.now()) {
+  const d = new Date(at);
+  const daysSinceMonday = (d.getDay() + 6) % 7; // getDay(): Sunday is 0
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - daysSinceMonday);
+  return d.getTime();
+}
+
+/**
+ * Billable seconds logged for a student this week. Includes the
+ * running session, so the dashboard total moves while you teach.
+ */
+export function weekSecondsFor(studentId, at = Date.now()) {
+  ensureLoaded();
+  const from = startOfWeek(at);
+
+  let total = data.sessions
+    .filter((s) => s.studentId === studentId && s.startedAt >= from)
+    .reduce((sum, s) => sum + s.netSeconds, 0);
+
+  const active = getActive();
+  if (active && active.studentId === studentId && active.startedAt >= from) {
+    total += netSecondsOf(active, at);
+  }
+  return total;
 }

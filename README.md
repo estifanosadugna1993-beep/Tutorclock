@@ -4,7 +4,7 @@ A trust-first time tracker for private tutors. Run a timer during a lesson,
 then send the parent a session summary they can trust — because the log shows
 everything, including your honest corrections.
 
-**Status: Step 1 of 7 — students, stored.**
+**Status: Step 2 of 7 — the live timer.**
 
 ---
 
@@ -45,12 +45,43 @@ will clear it too. Real backup/export arrives with the summary step.
 - Add a student: name, hourly rate in ETB, and a colour for their initial
 - Edit any student by tapping their row
 - Archive a student to hide them from the main list without deleting anything
+- **Start / pause / resume / stop a live timer** for a student
+- A running session is pinned to the top of the dashboard so it can't be forgotten
+- Pauses are excluded from billable time and recorded in the session
+- Stopping saves a `live` session with an optional note
+- **The timer survives the app closing, the phone locking, or a crash**
 - Everything persists to the device and survives a restart
 - Installs to a phone home screen and opens offline
 
-Not built yet, in build-plan order: the live timer (Step 2), session history
-and manual entry (Step 3), the edit/trust trail (Step 4), and the summary
-export (Step 5).
+Not built yet, in build-plan order: session history and manual entry (Step 3),
+the edit/trust trail (Step 4), and the summary export (Step 5). Sessions are
+being recorded now, but there is no screen to browse them yet.
+
+### How the crash-safe timer works
+
+This is the most important piece of engineering in the app, and it is worth
+understanding.
+
+A naive timer keeps a counter and adds one every second. That breaks the
+moment the app is not running — lock your phone for twenty minutes and you
+lose twenty minutes.
+
+This timer never counts. Starting a session writes down **the time it
+started**, and nothing else. Whenever the clock needs drawing, the app works
+out:
+
+```
+billable = now − startedAt − (time spent paused)
+```
+
+Because that is a subtraction against the device's real clock, it does not
+matter whether the app was open, backgrounded, or killed outright in between.
+Come back two hours later and the answer is simply correct. Pauses are stored
+the same way, as pairs of timestamps rather than as a stopwatch.
+
+The 250ms interval in `app.js` only decides how often the screen is
+repainted. It is not where the time comes from, and if it never ran at all
+the totals would still be right.
 
 ## How it is put together
 
