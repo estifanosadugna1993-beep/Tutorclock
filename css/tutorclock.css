@@ -706,6 +706,194 @@ button svg,
 .notice b { color: #392f8f; }
 
 /* ============================================================
+   Summary — the parent-facing card
+   ============================================================ */
+
+/* Range picker */
+.segment {
+  display: flex;
+  gap: 4px;
+  background: #edecf4;
+  border-radius: 12px;
+  padding: 4px;
+  margin-bottom: 14px;
+}
+.seg-btn {
+  flex: 1;
+  border: 0;
+  background: none;
+  border-radius: 9px;
+  padding: 10px 4px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.seg-btn.is-on {
+  background: #fff;
+  color: var(--ink);
+  box-shadow: 0 1px 4px #2d294514;
+}
+
+.date-row { display: flex; gap: 10px; margin-bottom: 16px; }
+.date-row .field-label { flex: 1; min-width: 0; font-size: 12px; }
+
+/* The card itself. Deliberately plain and light: it is printed,
+   screenshotted, and forwarded, so it must read well anywhere. */
+.share-card {
+  background: #fff;
+  border: 1px solid #eae9f1;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+  padding: 22px;
+}
+
+.share-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+.share-brand .brand-mark { width: 30px; height: 30px; border-radius: 9px; }
+.share-brand .brand-mark svg { width: 16px; }
+
+.share-who { margin: 22px 0 20px; }
+.share-who h2 {
+  margin: 0;
+  font-size: 25px;
+  letter-spacing: -0.03em;
+  overflow-wrap: anywhere;
+}
+.share-who p { margin: 4px 0 0; font-size: 13px; color: var(--muted); }
+
+.share-stats {
+  display: flex;
+  gap: 14px;
+  padding: 17px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+.share-stats > div { min-width: 0; flex: 1; }
+.share-stats b {
+  display: block;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.share-stats small {
+  display: block;
+  margin-top: 3px;
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.share-lines { padding-top: 4px; }
+.share-line {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid #f2f1f6;
+  font-size: 13.5px;
+}
+.share-line:last-child { border-bottom: 0; }
+.share-line-main { min-width: 0; }
+.share-line b { white-space: nowrap; font-weight: 700; }
+
+/* The honest label under a manual or corrected lesson. R3 lives
+   here: the parent sees the original value and the reason. */
+.share-line-main em {
+  display: block;
+  margin-top: 3px;
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #b26a00;
+  overflow-wrap: anywhere;
+}
+/* "Entered by hand" is a neutral fact, not a warning. */
+.share-line-main em.quiet { color: var(--muted); font-weight: 500; }
+
+.share-none { margin: 8px 0; font-size: 13px; color: var(--muted); }
+
+.share-note {
+  margin-top: 14px;
+  background: #fdf6ec;
+  border: 1px solid #f0dcc4;
+  border-radius: 10px;
+  padding: 11px 13px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #8a5a00;
+}
+
+.share-foot {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: #a9a7b5;
+  font-weight: 600;
+}
+
+.lock-line {
+  margin: 14px 2px 0;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+.action-pair { display: flex; gap: 9px; }
+.action-pair .secondary { flex: 1; }
+
+/* ============================================================
+   Print — "Save as PDF" with no PDF library.
+   The browser already makes excellent PDFs; we just hide the app
+   around the card and let it.
+   ============================================================ */
+
+@media print {
+  /* Undo the phone shell so the card can use the whole page. */
+  body { background: #fff; }
+  .shell {
+    max-width: none;
+    min-height: 0;
+    border: 0;
+    display: block;
+  }
+  .screen { display: block; }
+  .screen-body {
+    overflow: visible;
+    padding: 0;
+    display: block;
+  }
+
+  /* Everything that is app chrome rather than content. */
+  .no-print,
+  .app-header,
+  .screen-actions,
+  .toast {
+    display: none !important;
+  }
+
+  .share-card {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+    max-width: 100%;
+  }
+
+  /* Keep a lesson and its explanation on the same page. */
+  .share-line { break-inside: avoid; }
+  .share-note { break-inside: avoid; }
+}
+
+/* ============================================================
    Buttons — harvested .primary / .secondary
    Taller than the original: these are thumb targets, not
    mouse targets.

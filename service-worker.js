@@ -18,7 +18,7 @@
    whose name does not match, so changing it is what throws away
    the previous step's files. Forgetting to change it means an old
    version can keep being served from the cache. */
-const CACHE_NAME = 'tutorclock-step4';
+const CACHE_NAME = 'tutorclock-step5';
 
 const APP_SHELL = [
   './',
@@ -26,6 +26,7 @@ const APP_SHELL = [
   './css/tutorclock.css',
   './js/app.js',
   './js/store.js',
+  './js/share-image.js',
   './manifest.webmanifest',
   './icons/icon.svg',
   './icons/icon-192.png',

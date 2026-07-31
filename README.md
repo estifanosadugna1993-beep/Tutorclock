@@ -4,7 +4,7 @@ A trust-first time tracker for private tutors. Run a timer during a lesson,
 then send the parent a session summary they can trust — because the log shows
 everything, including your honest corrections.
 
-**Status: Step 4 of 7 — the trust trail.**
+**Status: Step 5 of 7 — summary and export. The v1 feature set is complete.**
 
 ---
 
@@ -38,7 +38,8 @@ This is the whole point of Step 1, so it is worth testing properly:
 
 Data is stored under the key `tutorclock.v1` in your browser's localStorage.
 Note that it is per-browser and per-device — clearing your browsing data
-will clear it too. Real backup/export arrives with the summary step.
+will clear it too. Summaries can be exported as a picture or a PDF, but there
+is no whole-database backup yet.
 
 ## What works now
 
@@ -58,9 +59,15 @@ will clear it too. Real backup/export arrives with the summary step.
 - Installs to a phone home screen and opens offline
 - **Correct a lesson without erasing anything.** Tap a lesson to see it in
   full, then correct its length with a reason. The original is kept forever
+- **A summary a parent can trust.** Pick a week, a month, all time, or a
+  custom range, and get a clean branded card with totals and every lesson
+- **Share it as a picture** straight into Telegram or WhatsApp, or **save it
+  as a PDF** — no libraries involved either way
+- Lessons included in a sent summary are **locked**: still correctable, but
+  it asks first and records the change
 
-Not built yet: the summary export (Step 5), which turns a date range into a
-clean PDF/image for a parent and locks the lessons it includes.
+That completes the v1 feature set from the build plan. What remains is
+Step 6: use it on real lessons for two weeks and fix what chafes.
 
 ### Live vs manual
 
@@ -127,6 +134,7 @@ index.html              the page shell
 css/tutorclock.css      design system, harvested from the old app's CSS
 js/store.js             the ONLY file that touches localStorage
 js/app.js               screens and interaction
+js/share-image.js       draws the parent's summary as a PNG on a canvas
 manifest.webmanifest    makes it installable
 service-worker.js       makes it work offline
 icons/                  app icons
@@ -155,6 +163,20 @@ that shrank down. This one inverts that: the base styles are the phone
 styles, and a single media query widens the column on a desktop. The sidebar,
 the multi-column grids, the chart, the login page and the payment list were
 all dropped.
+
+### How export works without any libraries
+
+Two outputs, neither needing a dependency:
+
+**Picture.** The card is drawn onto a `<canvas>` by hand in
+`js/share-image.js`, then handed to the phone's share sheet via the Web Share
+API — one tap into a chat. Drawing it ourselves rather than screenshotting the
+page means the image looks identical on every phone. Where file sharing is not
+supported the PNG simply downloads instead.
+
+**PDF.** There is no PDF library. The print stylesheet hides the whole app
+except the summary card, and the browser's own "Save as PDF" does the rest —
+which every phone and desktop browser already does well.
 
 ## The rules this app is built on
 

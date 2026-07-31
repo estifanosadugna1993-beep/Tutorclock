@@ -28,6 +28,10 @@ import {
   getSession,
   originalNetSeconds,
   correctSessionLength,
+  sessionsInRange,
+  lockSessions,
+  startOfWeek,
+  startOfMonth,
   getActive,
   netSecondsOf,
   isPaused,
@@ -40,6 +44,8 @@ import {
   STUDENT_COLORS,
   DEFAULT_CURRENCY,
 } from './store.js';
+
+import { drawSummary, toPngBlob } from './share-image.js';
 
 /* ------------------------------------------------------------
    Tiny helpers
@@ -144,6 +150,8 @@ const icon = {
   stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v14"/></svg>',
+  receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12a1 1 0 0 1 1 1v18l-3-2-2 2-2-2-2 2-2-2-3 2V3a1 1 0 0 1 1-1z"/><path d="M9 8h6M9 12h6"/></svg>',
 };
 
 /* ------------------------------------------------------------
@@ -207,7 +215,8 @@ function render() {
 
   // A screen that needs a student cannot render if that student is
   // gone; fall back rather than throwing.
-  if ((screen.name === 'student' || screen.name === 'addManual') && !getStudent(screen.id)) {
+  if ((screen.name === 'student' || screen.name === 'addManual' || screen.name === 'summary')
+      && !getStudent(screen.id)) {
     screen = { name: 'dashboard' };
   }
   if ((screen.name === 'session' || screen.name === 'correct') && !getSession(screen.id)) {
@@ -220,6 +229,7 @@ function render() {
   else if (screen.name === 'timer') app.innerHTML = TimerScreen();
   else if (screen.name === 'student') app.innerHTML = StudentDetail(getStudent(screen.id));
   else if (screen.name === 'addManual') app.innerHTML = ManualForm(getStudent(screen.id));
+  else if (screen.name === 'summary') app.innerHTML = SummaryScreen(getStudent(screen.id));
   else if (screen.name === 'session') app.innerHTML = SessionDetail(getSession(screen.id));
   else if (screen.name === 'correct') app.innerHTML = CorrectForm(getSession(screen.id));
   else app.innerHTML = Dashboard();
@@ -430,9 +440,15 @@ function StudentDetail(student) {
                   data-id="${esc(student.id)}" ${someoneElseRunning ? 'disabled' : ''}>
             ${isRunning ? 'Open running lesson' : `${icon.play} Start lesson`}
           </button>
-          <button class="secondary" data-action="add-manual" data-id="${esc(student.id)}">
-            ${icon.plus} Add a past lesson
-          </button>
+          <div class="action-pair">
+            <button class="secondary" data-action="add-manual" data-id="${esc(student.id)}">
+              ${icon.plus} Add past
+            </button>
+            <button class="secondary" data-action="open-summary" data-id="${esc(student.id)}"
+                    ${sessions.length === 0 ? 'disabled' : ''}>
+              ${icon.receipt} Summary
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -588,6 +604,218 @@ function editHistory(session) {
           <small>${esc(fullDateTime(edit.editedAt))}</small>
         </div>
       `).join('')}
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen 4 — Summary (the payoff)
+   ------------------------------------------------------------
+   What the parent actually receives. Trust rule R3 governs this
+   screen: manual and corrected lessons are labelled here, and a
+   corrected lesson shows what it used to be. Anything hidden here
+   would defeat the point of the app.
+   ------------------------------------------------------------ */
+
+/* Which date range the summary is showing. Kept outside the render
+   so switching students does not reset it. */
+let summaryRange = 'month';
+let customFrom = toDateInput(Date.now() - 13 * 86400000);
+let customTo = toDateInput(Date.now());
+
+function summaryWindow() {
+  if (summaryRange === 'week') {
+    return { from: startOfWeek(), to: Infinity, label: 'This week' };
+  }
+  if (summaryRange === 'month') {
+    return { from: startOfMonth(), to: Infinity, label: 'This month' };
+  }
+  if (summaryRange === 'custom') {
+    const from = new Date(`${customFrom}T00:00:00`).getTime();
+    const to = new Date(`${customTo}T23:59:59`).getTime();
+    return {
+      from,
+      to,
+      label: `${dayLabel(from)} – ${dayLabel(new Date(`${customTo}T12:00:00`).getTime())}`,
+    };
+  }
+  return { from: 0, to: Infinity, label: 'All lessons' };
+}
+
+/* Everything the summary needs, in one place, so the on-screen card
+   and the exported picture can never disagree with each other. */
+function buildSummary(student) {
+  const { from, to, label } = summaryWindow();
+  const sessions = sessionsInRange(student.id, from, to)
+    .slice()
+    .sort((a, b) => a.startedAt - b.startedAt); // oldest first reads better
+
+  const seconds = sessions.reduce((sum, s) => sum + s.netSeconds, 0);
+  const hasRate = student.hourlyRate > 0;
+
+  const anyManual = sessions.some((s) => s.entryType === 'manual');
+  const anyEdited = sessions.some((s) => s.edits.length > 0);
+
+  const lines = sessions.map((s) => {
+    const isManual = s.entryType === 'manual';
+    const isEdited = s.edits.length > 0;
+
+    /* Two different kinds of fact, so they get two different voices.
+       "Entered by hand" is neutral - plenty of honest lessons are
+       typed in later - so it stays quiet and grey. A correction is
+       the notable one, so it is highlighted and carries the original
+       length and the reason. Flagging both in alarm colours would
+       make an honest tutor's page look like a list of warnings,
+       which is the opposite of what this app is for. */
+    const manualNote = isManual ? 'entered by hand, not timed' : '';
+
+    let adjustedNote = '';
+    if (isEdited) {
+      const original = durationText(originalNetSeconds(s));
+      const reason = s.edits[s.edits.length - 1].reason;
+      adjustedNote = reason
+        ? `adjusted from ${original} — “${reason}”`
+        : `adjusted from ${original}`;
+    }
+
+    return {
+      id: s.id,
+      main: `${dayLabel(s.startedAt)} · ${durationText(s.netSeconds)}`,
+      manualNote,
+      adjustedNote,
+      amount: hasRate
+        ? money((s.netSeconds / 3600) * student.hourlyRate, student.currency)
+        : '',
+      locked: s.locked,
+    };
+  });
+
+  // The plain-language honesty note, only when it applies.
+  let tutorNote = '';
+  if (anyManual || anyEdited) {
+    const parts = [];
+    if (anyManual) parts.push('Lessons marked “entered by hand” were written down after the lesson rather than timed live.');
+    if (anyEdited) parts.push('Adjusted lessons show their original length and why it changed.');
+    parts.push('Nothing here is hidden.');
+    tutorNote = parts.join(' ');
+  }
+
+  return {
+    student,
+    sessions,
+    lines,
+    periodLabel: label,
+    currency: student.currency,
+    totals: {
+      count: sessions.length,
+      seconds,
+      durationText: durationText(seconds),
+      amount: hasRate
+        ? money((seconds / 3600) * student.hourlyRate, student.currency)
+        : '',
+    },
+    tutorNote,
+  };
+}
+
+function SummaryScreen(student) {
+  const data = buildSummary(student);
+  const ranges = [['week', 'Week'], ['month', 'Month'], ['all', 'All'], ['custom', 'Custom']];
+  const lockedCount = data.sessions.filter((s) => s.locked).length;
+
+  return `
+    <div class="screen">
+      <header class="app-header no-print">
+        <button class="back-button" data-action="back-to-student"
+                data-id="${esc(student.id)}" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>Summary</h1>
+          <p>What ${esc(student.name)}'s parent will see</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="segment no-print">
+          ${ranges.map(([key, label]) => `
+            <button class="seg-btn ${summaryRange === key ? 'is-on' : ''}"
+                    data-action="set-range" data-range="${key}">${label}</button>
+          `).join('')}
+        </div>
+
+        ${summaryRange === 'custom' ? `
+          <div class="date-row no-print">
+            <label class="field-label">From
+              <input class="field" type="date" id="from" value="${esc(customFrom)}"
+                     max="${esc(customTo)}">
+            </label>
+            <label class="field-label">To
+              <input class="field" type="date" id="to" value="${esc(customTo)}"
+                     min="${esc(customFrom)}">
+            </label>
+          </div>
+        ` : ''}
+
+        <!-- This card is what gets printed and what the picture mirrors -->
+        <div class="share-card" id="share-card">
+          <div class="share-brand">
+            <span class="brand-mark">${icon.clock}</span>
+            <b>TutorClock</b>
+          </div>
+
+          <div class="share-who">
+            <h2>${esc(student.name)}</h2>
+            <p>${esc(data.periodLabel)}</p>
+          </div>
+
+          <div class="share-stats">
+            <div><b>${esc(data.totals.durationText)}</b><small>Tutored</small></div>
+            <div><b>${data.totals.count}</b><small>${data.totals.count === 1 ? 'Lesson' : 'Lessons'}</small></div>
+            ${data.totals.amount
+              ? `<div><b>${esc(data.totals.amount)}</b><small>Total</small></div>`
+              : ''}
+          </div>
+
+          <div class="share-lines">
+            ${data.lines.length === 0
+              ? '<p class="share-none">No lessons in this period.</p>'
+              : data.lines.map((line) => `
+                  <div class="share-line">
+                    <span class="share-line-main">
+                      ${esc(line.main)}
+                      ${line.manualNote ? `<em class="quiet">${esc(line.manualNote)}</em>` : ''}
+                      ${line.adjustedNote ? `<em>${esc(line.adjustedNote)}</em>` : ''}
+                    </span>
+                    ${line.amount ? `<b>${esc(line.amount)}</b>` : ''}
+                  </div>
+                `).join('')}
+          </div>
+
+          ${data.tutorNote ? `<div class="share-note">${esc(data.tutorNote)}</div>` : ''}
+
+          <div class="share-foot">tracked with TutorClock</div>
+        </div>
+
+        ${lockedCount > 0 ? `
+          <p class="lock-line no-print">
+            ${lockedCount} of these ${lockedCount === 1 ? 'lesson has' : 'lessons have'}
+            already been sent and locked. Correcting one still works, but asks first
+            and is recorded.
+          </p>
+        ` : ''}
+      </div>
+
+      <div class="screen-actions no-print">
+        <button class="primary" data-action="share-image" data-id="${esc(student.id)}"
+                ${data.sessions.length === 0 ? 'disabled' : ''}>
+          ${icon.share} Share as picture
+        </button>
+        <button class="secondary" data-action="print-summary"
+                ${data.sessions.length === 0 ? 'disabled' : ''}>
+          Save as PDF
+        </button>
+      </div>
     </div>
   `;
 }
@@ -1003,6 +1231,17 @@ function wireUp() {
     } else if (action === 'save-correction') {
       saveCorrection(trigger.dataset.id);
 
+    // ---- summary ----
+    } else if (action === 'open-summary') {
+      go({ name: 'summary', id: trigger.dataset.id });
+    } else if (action === 'set-range') {
+      summaryRange = trigger.dataset.range;
+      render();
+    } else if (action === 'share-image') {
+      shareSummaryImage(trigger.dataset.id);
+    } else if (action === 'print-summary') {
+      printSummary();
+
     // ---- timer ----
     } else if (action === 'start-session') {
       const result = startSession(trigger.dataset.id);
@@ -1036,6 +1275,7 @@ function wireUp() {
 
   wireManualForm();
   wireCorrectForm();
+  wireSummaryDates();
 
   const form = document.getElementById('student-form');
   if (!form) return;
@@ -1272,6 +1512,121 @@ function saveCorrection(sessionId) {
 
   go({ name: 'session', id: sessionId });
   toast('Correction saved and logged');
+}
+
+/* Custom date range inputs on the summary screen. */
+function wireSummaryDates() {
+  const from = document.getElementById('from');
+  const to = document.getElementById('to');
+  if (!from || !to) return;
+
+  from.onchange = () => { customFrom = from.value; render(); };
+  to.onchange = () => { customTo = to.value; render(); };
+}
+
+/* ------------------------------------------------------------
+   Getting the summary to the parent
+   ------------------------------------------------------------ */
+
+/**
+ * Turn the summary into a PNG and hand it to the phone's share
+ * sheet, so it goes straight into Telegram or WhatsApp. Falls back
+ * to a plain download where sharing files is not supported.
+ */
+async function shareSummaryImage(studentId) {
+  const student = getStudent(studentId);
+  if (!student) return;
+
+  const data = buildSummary(student);
+  if (data.sessions.length === 0) {
+    toast('No lessons in this period.');
+    return;
+  }
+
+  try {
+    const canvas = drawSummary(data);
+    const blob = await toPngBlob(canvas);
+    if (!blob) throw new Error('could not make the image');
+
+    const filename =
+      `${student.name.replace(/[^\p{L}\p{N}]+/gu, '-')}-${data.periodLabel.replace(/[^\p{L}\p{N}]+/gu, '-')}.png`
+        .replace(/-+/g, '-').toLowerCase();
+
+    const file = new File([blob], filename, { type: 'image/png' });
+
+    // The share sheet is the good path on a phone: one tap into a chat.
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: `${student.name} — ${data.periodLabel}`,
+      });
+    } else {
+      downloadBlob(blob, filename);
+    }
+
+    lockSummarised(data);
+  } catch (err) {
+    // Cancelling the share sheet throws AbortError; that is not a failure,
+    // and the lessons should NOT be locked because nothing was sent.
+    if (err && err.name === 'AbortError') return;
+    console.error('TutorClock: share failed', err);
+    toast('Could not create the picture.');
+  }
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  // Give the browser a moment to start the download before revoking.
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+/**
+ * Print the summary. The print stylesheet hides the whole app except
+ * the card, so the browser's own "Save as PDF" produces a clean page
+ * with no buttons or navigation on it - and no PDF library needed.
+ */
+function printSummary() {
+  const student = getStudent(screen.id);
+  if (!student) return;
+
+  const data = buildSummary(student);
+  if (data.sessions.length === 0) {
+    toast('No lessons in this period.');
+    return;
+  }
+
+  // The print dialog is synchronous, so lock first: by the time it
+  // opens, the summary counts as sent.
+  lockSummarised(data);
+  window.print();
+}
+
+/**
+ * R4: lessons that have now gone to a parent get locked. They can
+ * still be corrected - the tutor is never trapped - but it takes an
+ * extra confirmation and the change is recorded like any other.
+ */
+function lockSummarised(data) {
+  const unlocked = data.sessions.filter((s) => !s.locked);
+  if (unlocked.length === 0) {
+    toast('Summary shared');
+    return;
+  }
+
+  const result = lockSessions(unlocked.map((s) => s.id));
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  render(); // repaint so the lock notice appears
+  toast(`Shared · ${result.locked} ${result.locked === 1 ? 'lesson' : 'lessons'} now locked`);
 }
 
 /* Stop the timer and save the lesson. */

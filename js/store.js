@@ -623,12 +623,58 @@ export function addManualSession({ studentId, minutes, note = '', at }) {
   return { ok: true, session };
 }
 
+/**
+ * Lessons for a student inside a date range, newest first.
+ * `to` is inclusive of the whole day.
+ */
+export function sessionsInRange(studentId, from, to) {
+  return sessionsFor(studentId).filter((s) => s.startedAt >= from && s.startedAt <= to);
+}
+
+/**
+ * Mark lessons as included in a summary that has been sent.
+ *
+ * TRUST RULE R4: once numbers have gone to a parent they should not
+ * change quietly behind their back. Locking does NOT freeze a lesson
+ * - the tutor can still correct it - it just means the correction
+ * takes a deliberate extra confirmation and, as always, is recorded.
+ */
+export function lockSessions(sessionIds) {
+  ensureLoaded();
+
+  const wanted = new Set(sessionIds);
+  const previous = data.sessions;
+  let changed = 0;
+
+  data.sessions = data.sessions.map((s) => {
+    if (!wanted.has(s.id) || s.locked) return s;
+    changed += 1;
+    return { ...s, locked: true, lockedAt: Date.now() };
+  });
+
+  if (changed === 0) return { ok: true, locked: 0 };
+
+  if (!writeToDisk()) {
+    data.sessions = previous;
+    return { ok: false, error: 'Could not lock the lessons.' };
+  }
+  return { ok: true, locked: changed };
+}
+
 /** Midnight on Monday of the current week, as a timestamp. */
 export function startOfWeek(at = Date.now()) {
   const d = new Date(at);
   const daysSinceMonday = (d.getDay() + 6) % 7; // getDay(): Sunday is 0
   d.setHours(0, 0, 0, 0);
   d.setDate(d.getDate() - daysSinceMonday);
+  return d.getTime();
+}
+
+/** Midnight on the first day of the current month. */
+export function startOfMonth(at = Date.now()) {
+  const d = new Date(at);
+  d.setHours(0, 0, 0, 0);
+  d.setDate(1);
   return d.getTime();
 }
 
