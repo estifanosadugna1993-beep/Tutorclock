@@ -431,6 +431,7 @@ export function stopSession(note = '') {
     note: String(note || '').trim(),
     edits: [],                                    // R2: the trust trail
     locked: false,                                // R4: set when shared
+    createdAt: endedAt,                           // when the record was made
   };
 
   data.sessions.push(session);
@@ -470,6 +471,81 @@ export function sessionsFor(studentId) {
   return data.sessions
     .filter((s) => s.studentId === studentId)
     .sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/**
+ * Totals across every saved session for a student.
+ * Does not include a session still running - that one is not a
+ * fact yet, and the dashboard shows it separately.
+ */
+export function totalsFor(studentId) {
+  ensureLoaded();
+  const student = getStudent(studentId);
+  const list = sessionsFor(studentId);
+  const seconds = list.reduce((sum, s) => sum + s.netSeconds, 0);
+  return {
+    count: list.length,
+    seconds,
+    amount: student && student.hourlyRate > 0
+      ? (seconds / 3600) * student.hourlyRate
+      : 0,
+  };
+}
+
+/* Longest lesson we will accept as a manual entry. Anything past
+   this is much more likely to be a typo than a real lesson. */
+const MAX_MANUAL_MINUTES = 24 * 60;
+
+/**
+ * Add a lesson that happened before the app was installed, or one
+ * where the tutor forgot to press start.
+ *
+ * Trust rule R1: this is saved as entryType 'manual' and can never
+ * be confused with a session that was really clocked. That honesty
+ * is the point - a parent seeing "manual" knows exactly what they
+ * are looking at.
+ */
+export function addManualSession({ studentId, minutes, note = '', at }) {
+  ensureLoaded();
+
+  if (!getStudent(studentId)) return { ok: false, error: 'That student no longer exists.' };
+
+  const mins = Number.parseFloat(minutes);
+  if (!Number.isFinite(mins) || mins <= 0) {
+    return { ok: false, error: 'Enter how many minutes the lesson lasted.' };
+  }
+  if (mins > MAX_MANUAL_MINUTES) {
+    return { ok: false, error: 'That is longer than a whole day - check the minutes.' };
+  }
+
+  const when = Number.isFinite(at) ? at : Date.now();
+  // Allow a minute of slack so "today" never trips this at midnight.
+  if (when > Date.now() + 60000) {
+    return { ok: false, error: 'That day is in the future.' };
+  }
+
+  const netSeconds = Math.round(mins * 60);
+  const session = {
+    id: newId(),
+    studentId,
+    startedAt: when,
+    endedAt: when + netSeconds * 1000,
+    pauses: [],
+    netSeconds,
+    entryType: 'manual',          // R1: typed in, not clocked
+    note: String(note || '').trim(),
+    edits: [],                    // R2: the trust trail, used from Step 4
+    locked: false,                // R4: set when included in a summary
+    createdAt: Date.now(),        // when it was typed in, vs when it happened
+  };
+
+  data.sessions.push(session);
+
+  if (!writeToDisk()) {
+    data.sessions.pop();
+    return { ok: false, error: 'Could not save the lesson.' };
+  }
+  return { ok: true, session };
 }
 
 /** Midnight on Monday of the current week, as a timestamp. */

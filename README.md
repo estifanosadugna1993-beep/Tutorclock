@@ -4,7 +4,7 @@ A trust-first time tracker for private tutors. Run a timer during a lesson,
 then send the parent a session summary they can trust — because the log shows
 everything, including your honest corrections.
 
-**Status: Step 2 of 7 — the live timer.**
+**Status: Step 3 of 7 — lesson history and manual entry.**
 
 ---
 
@@ -43,19 +43,36 @@ will clear it too. Real backup/export arrives with the summary step.
 ## What works now
 
 - Add a student: name, hourly rate in ETB, and a colour for their initial
-- Edit any student by tapping their row
 - Archive a student to hide them from the main list without deleting anything
-- **Start / pause / resume / stop a live timer** for a student
+- **Tap a student to start their lesson.** The chevron opens their history;
+  editing the name or rate lives in there behind the pencil
+- **Start / pause / resume / stop a live timer**
 - A running session is pinned to the top of the dashboard so it can't be forgotten
 - Pauses are excluded from billable time and recorded in the session
-- Stopping saves a `live` session with an optional note
 - **The timer survives the app closing, the phone locking, or a crash**
+- **Per-student lesson history**: every lesson with its length, day, note and
+  amount, plus totals for lessons, time and earnings
+- **Add a lesson that already happened**, for the ones you forgot to clock —
+  saved as `manual` and badged as such
 - Everything persists to the device and survives a restart
 - Installs to a phone home screen and opens offline
 
-Not built yet, in build-plan order: session history and manual entry (Step 3),
-the edit/trust trail (Step 4), and the summary export (Step 5). Sessions are
-being recorded now, but there is no screen to browse them yet.
+Not built yet, in build-plan order: the edit/trust trail (Step 4) and the
+summary export (Step 5). Lessons can be added but not yet corrected — because
+a correction has to *append* to the record rather than overwrite it, which is
+exactly what Step 4 builds.
+
+### Live vs manual
+
+Every lesson carries a badge, and the two can never be confused:
+
+- **LIVE** (green) — the timer actually ran for this lesson.
+- **MANUAL** (grey) — it was typed in afterwards.
+
+That distinction is trust rule R1 and it is stored, not just displayed. A
+parent looking at a summary can see which lessons were clocked in real time
+and which were entered from memory. Hiding that would defeat the point of
+the whole app.
 
 ### How the crash-safe timer works
 

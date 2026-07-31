@@ -22,6 +22,9 @@ import {
   updateStudent,
   suggestColor,
   isStorageBroken,
+  sessionsFor,
+  totalsFor,
+  addManualSession,
   getActive,
   netSecondsOf,
   isPaused,
@@ -91,6 +94,32 @@ function timeOfDay(timestamp) {
   });
 }
 
+/* "Mon 12 Aug", or "Today" / "Yesterday" when that reads better. */
+function dayLabel(timestamp) {
+  const midnight = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const days = Math.round((midnight(Date.now()) - midnight(timestamp)) / 86400000);
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Yesterday';
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    weekday: 'short', day: 'numeric', month: 'short',
+  });
+}
+
+/* yyyy-mm-dd for a <input type="date">, in local time. */
+function toDateInput(timestamp) {
+  const d = new Date(timestamp);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/* Read a date input back. Noon local, so shifting time zones can
+   never nudge a lesson onto the day before or after. */
+function fromDateInput(value) {
+  if (!value) return Date.now();
+  const parsed = new Date(`${value}T12:00:00`).getTime();
+  return Number.isFinite(parsed) ? parsed : Date.now();
+}
+
 /* Inline SVG icons, so the app needs no icon font and no network. */
 const icon = {
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
@@ -111,10 +140,14 @@ const icon = {
 
 let toastTimer = null;
 
-function toast(message) {
+function dismissToast() {
   const existing = document.querySelector('.toast');
   if (existing) existing.remove();
   clearTimeout(toastTimer);
+}
+
+function toast(message) {
+  dismissToast();
 
   const el = document.createElement('div');
   el.className = 'toast';
@@ -142,6 +175,12 @@ function toast(message) {
 let screen = { name: 'dashboard' };
 
 function go(next) {
+  // Drop any toast from the screen we are leaving. Its position was
+  // measured against that screen's button bar, so on a screen with a
+  // taller bar it would sit on top of the buttons. Callers that want
+  // a toast after navigating call toast() after go().
+  dismissToast();
+
   screen = next;
   render();
   // Always start a new screen scrolled to the top.
@@ -154,10 +193,18 @@ function render() {
   // fall back to the dashboard rather than rendering an empty screen.
   if (screen.name === 'timer' && !getActive()) screen = { name: 'dashboard' };
 
+  // A screen that needs a student cannot render if that student is
+  // gone; fall back rather than throwing.
+  if ((screen.name === 'student' || screen.name === 'addManual') && !getStudent(screen.id)) {
+    screen = { name: 'dashboard' };
+  }
+
   if (screen.name === 'dashboard') app.innerHTML = Dashboard();
   else if (screen.name === 'addStudent') app.innerHTML = StudentForm(null);
   else if (screen.name === 'editStudent') app.innerHTML = StudentForm(getStudent(screen.id));
   else if (screen.name === 'timer') app.innerHTML = TimerScreen();
+  else if (screen.name === 'student') app.innerHTML = StudentDetail(getStudent(screen.id));
+  else if (screen.name === 'addManual') app.innerHTML = ManualForm(getStudent(screen.id));
   else app.innerHTML = Dashboard();
 
   wireUp();
@@ -280,10 +327,188 @@ function studentRow(student, active) {
         </span>
       </button>
 
-      <button class="edit-btn" data-action="edit-student" data-id="${esc(student.id)}"
-              aria-label="Edit ${esc(student.name)}">
-        ${icon.pencil}
+      <button class="edit-btn" data-action="open-student" data-id="${esc(student.id)}"
+              aria-label="${esc(student.name)}'s lessons">
+        ${icon.chevron}
       </button>
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen 3 — Student detail / lesson history
+   ------------------------------------------------------------
+   The honest record for one student. Every lesson shows how it
+   was created - clocked live, or typed in afterwards - because
+   trust rule R1 says those two must never blur together.
+
+   Correcting a lesson is deliberately NOT here yet; that is Step
+   4, where an edit has to append to the trust trail rather than
+   quietly overwrite.
+   ------------------------------------------------------------ */
+
+function StudentDetail(student) {
+  const sessions = sessionsFor(student.id);
+  const totals = totalsFor(student.id);
+  const active = getActive();
+  const isRunning = Boolean(active && active.studentId === student.id);
+  const someoneElseRunning = Boolean(active && !isRunning);
+
+  const rateText = student.hourlyRate > 0
+    ? `${money(student.hourlyRate, student.currency)}/hr`
+    : 'No rate set';
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="go-dashboard" aria-label="Back to students">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>${esc(student.name)}</h1>
+          <p>${esc(rateText)}</p>
+        </div>
+        <button class="edit-btn" data-action="edit-student" data-id="${esc(student.id)}"
+                aria-label="Edit ${esc(student.name)}">
+          ${icon.pencil}
+        </button>
+      </header>
+
+      <div class="screen-body">
+        <div class="stat-strip">
+          <div class="stat-cell">
+            <b>${totals.count}</b>
+            <small>${totals.count === 1 ? 'lesson' : 'lessons'}</small>
+          </div>
+          <div class="stat-cell">
+            <b>${esc(durationText(totals.seconds))}</b>
+            <small>total</small>
+          </div>
+          ${student.hourlyRate > 0 ? `
+            <div class="stat-cell">
+              <b>${esc(money(totals.amount, student.currency))}</b>
+              <small>earned</small>
+            </div>
+          ` : ''}
+        </div>
+
+        ${sessions.length === 0 ? `
+          <div class="empty">
+            <span>${icon.clock}</span>
+            <h3>No lessons yet</h3>
+            <p>Tap <b>Start lesson</b> when your next lesson begins, or add
+               one that already happened.</p>
+          </div>
+        ` : `
+          <div class="list-heading">Lessons</div>
+          <div class="session-list">
+            ${sessions.map((s) => sessionRow(s, student)).join('')}
+          </div>
+        `}
+      </div>
+
+      <div class="screen-actions">
+        <div class="detail-actions">
+          <button class="primary" data-action="${isRunning ? 'open-timer' : 'start-session'}"
+                  data-id="${esc(student.id)}" ${someoneElseRunning ? 'disabled' : ''}>
+            ${isRunning ? 'Open running lesson' : `${icon.play} Start lesson`}
+          </button>
+          <button class="secondary" data-action="add-manual" data-id="${esc(student.id)}">
+            ${icon.plus} Add a past lesson
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function sessionRow(session, student) {
+  const isManual = session.entryType === 'manual';
+  const amount = student.hourlyRate > 0
+    ? money((session.netSeconds / 3600) * student.hourlyRate, student.currency)
+    : '';
+
+  // Detail line: when it happened, any breaks, and the note.
+  const bits = [dayLabel(session.startedAt)];
+  if (!isManual) bits.push(timeOfDay(session.startedAt));
+  if (session.pauses.length > 0) {
+    bits.push(`${session.pauses.length} break${session.pauses.length === 1 ? '' : 's'}`);
+  }
+  const detail = bits.join(' · ');
+
+  return `
+    <div class="session-row">
+      <div class="session-main">
+        <div class="session-top">
+          <b>${esc(durationText(session.netSeconds))}</b>
+          <span class="status ${isManual ? '' : 'active'}">${isManual ? 'Manual' : 'Live'}</span>
+        </div>
+        <small>${esc(detail)}</small>
+        ${session.note ? `<p class="session-note">${esc(session.note)}</p>` : ''}
+      </div>
+      ${amount ? `<div class="session-amount">${esc(amount)}</div>` : ''}
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Add a past lesson (manual entry)
+   ------------------------------------------------------------ */
+
+function ManualForm(student) {
+  const today = toDateInput(Date.now());
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="back-to-student"
+                data-id="${esc(student.id)}" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>Add a past lesson</h1>
+          <p>For ${esc(student.name)}</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="notice">
+          Saved as <b>manual</b>, so it stays honestly marked apart from
+          lessons the timer actually clocked. Parents see the difference.
+        </div>
+
+        <form class="form" id="manual-form" autocomplete="off">
+          <label class="field-label">
+            How long was it?
+            <span class="field-wrap">
+              <input class="field" id="minutes" inputmode="numeric"
+                     placeholder="60" maxlength="4">
+              <span class="field-suffix">minutes</span>
+            </span>
+          </label>
+
+          <label class="field-label">
+            Which day?
+            <input class="field" id="day" type="date" value="${esc(today)}" max="${esc(today)}">
+            <span class="field-hint" id="day-hint">Today</span>
+          </label>
+
+          <label class="field-label">
+            <span>Note <span class="label-note">(optional)</span></span>
+            <input class="field" id="manual-note" placeholder="e.g. make-up lesson"
+                   maxlength="120">
+          </label>
+        </form>
+      </div>
+
+      <div class="screen-actions">
+        <button class="primary" data-action="save-manual" data-id="${esc(student.id)}" disabled>
+          Add lesson
+        </button>
+        <button class="secondary" data-action="back-to-student" data-id="${esc(student.id)}">
+          Cancel
+        </button>
+      </div>
     </div>
   `;
 }
@@ -554,6 +779,16 @@ function wireUp() {
     } else if (action === 'save') {
       saveStudent();
 
+    // ---- lesson history ----
+    } else if (action === 'open-student') {
+      go({ name: 'student', id: trigger.dataset.id });
+    } else if (action === 'back-to-student') {
+      go({ name: 'student', id: trigger.dataset.id });
+    } else if (action === 'add-manual') {
+      go({ name: 'addManual', id: trigger.dataset.id });
+    } else if (action === 'save-manual') {
+      saveManualSession(trigger.dataset.id);
+
     // ---- timer ----
     } else if (action === 'start-session') {
       const result = startSession(trigger.dataset.id);
@@ -584,6 +819,8 @@ function wireUp() {
   // Focus the note box as soon as the confirm panel opens.
   const note = document.getElementById('note');
   if (note) note.focus();
+
+  wireManualForm();
 
   const form = document.getElementById('student-form');
   if (!form) return;
@@ -672,6 +909,73 @@ function saveStudent() {
   }
 }
 
+/* The add-a-past-lesson form. */
+function wireManualForm() {
+  const form = document.getElementById('manual-form');
+  if (!form) return;
+
+  const minutes = document.getElementById('minutes');
+  const day = document.getElementById('day');
+  const hint = document.getElementById('day-hint');
+  const saveButton = app.querySelector('[data-action="save-manual"]');
+
+  const refresh = () => {
+    const mins = Number.parseFloat(minutes.value);
+    saveButton.disabled = !(Number.isFinite(mins) && mins > 0 && day.value);
+
+    // Say the chosen day back in words, so a mis-tapped date is
+    // obvious before it gets saved.
+    if (day.value) {
+      const at = fromDateInput(day.value);
+      const spelled = new Date(at).toLocaleDateString(undefined, {
+        weekday: 'long', day: 'numeric', month: 'long',
+      });
+      const relative = dayLabel(at);
+      hint.textContent = relative === spelled ? spelled : `${relative} · ${spelled}`;
+    } else {
+      hint.textContent = '';
+    }
+  };
+
+  minutes.oninput = () => {
+    const cleaned = minutes.value.replace(/[^0-9]/g, '');
+    if (cleaned !== minutes.value) minutes.value = cleaned;
+    refresh();
+  };
+  day.oninput = refresh;
+  day.onchange = refresh;
+
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    saveManualSession(saveButton.dataset.id);
+  };
+
+  refresh();
+  minutes.focus();
+}
+
+function saveManualSession(studentId) {
+  const minutes = document.getElementById('minutes');
+  const day = document.getElementById('day');
+  const noteInput = document.getElementById('manual-note');
+  if (!minutes) return;
+
+  const result = addManualSession({
+    studentId,
+    minutes: minutes.value,
+    note: noteInput ? noteInput.value : '',
+    at: fromDateInput(day.value),
+  });
+
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  go({ name: 'student', id: studentId });
+  toast(`${durationText(result.session.netSeconds)} added as manual`);
+}
+
 /* Stop the timer and save the lesson. */
 function finishSession() {
   const noteInput = document.getElementById('note');
@@ -684,7 +988,9 @@ function finishSession() {
 
   const student = getStudent(result.session.studentId);
   confirmingStop = false;
-  go({ name: 'dashboard' });
+  // Land on the student's history so the lesson you just saved is
+  // visible straight away, rather than disappearing into a total.
+  go({ name: 'student', id: result.session.studentId });
   toast(`${durationText(result.session.netSeconds)} saved for ${student ? student.name : 'student'}`);
 }
 
