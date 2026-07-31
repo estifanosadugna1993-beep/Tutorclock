@@ -530,13 +530,20 @@ button svg,
   display: flex;
   align-items: flex-start;
   gap: 10px;
+  width: 100%;
+  text-align: left;
+  color: inherit;
   background: #fff;
   border: 1px solid #eae9f1;
   border-radius: 13px;
   box-shadow: 0 3px 12px #2d29450a;
   padding: 13px 14px;
+  transition: transform 0.12s;
 }
-.session-main { flex: 1; min-width: 0; }
+.session-row:active { transform: scale(0.99); }
+.session-row .chevron { align-self: center; }
+
+.session-main { flex: 1; min-width: 0; display: block; }
 
 .session-top {
   display: flex;
@@ -553,17 +560,135 @@ button svg,
   color: var(--muted);
 }
 .session-note {
+  display: block;
   margin: 6px 0 0;
   font-size: 12.5px;
   color: var(--ink-soft);
   overflow-wrap: anywhere;
 }
+
+/* A corrected lesson says so in the list, with what it used to be.
+   The tutor sees exactly what the parent will see. */
+.session-adjusted {
+  display: block;
+  margin: 5px 0 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: #b26a00;
+}
+
 .session-amount {
   flex: none;
+  align-self: center;
   font-weight: 700;
   font-size: 14px;
   white-space: nowrap;
 }
+
+/* ============================================================
+   One lesson in full, and its trust trail
+   ============================================================ */
+
+.lesson-head {
+  background: #fff;
+  border: 1px solid #eae9f1;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+  padding: 20px;
+  text-align: center;
+  margin-bottom: 16px;
+}
+.lesson-length {
+  font-size: 38px;
+  font-weight: 750;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.lesson-badges {
+  display: flex;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+.lesson-amount {
+  margin-top: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-soft);
+}
+
+.breakdown {
+  background: #fff;
+  border: 1px solid #eae9f1;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+  padding: 4px 16px;
+}
+.breakdown-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 0;
+  border-bottom: 1px solid #f2f1f6;
+  font-size: 13.5px;
+}
+.breakdown-row:last-child { border-bottom: 0; }
+.breakdown-row span { color: var(--muted); }
+.breakdown-row b { font-variant-numeric: tabular-nums; }
+.breakdown-row b.is-strong { color: var(--purple); }
+
+.note-card {
+  padding: 15px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/* The corrections list — the trust trail made visible. */
+.change-list { display: grid; gap: 9px; }
+
+.change-item {
+  background: #fff;
+  border: 1px solid #f0dcc4;
+  border-left: 3px solid var(--orange);
+  border-radius: 12px;
+  padding: 13px 15px;
+}
+.change-values {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 700;
+}
+.change-values svg { width: 15px; color: var(--muted); flex: none; }
+.change-values .from {
+  color: var(--muted);
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+.change-values .to { color: #b26a00; }
+.change-reason {
+  margin: 7px 0 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+  overflow-wrap: anywhere;
+}
+.change-reason.none { color: #a9a7b5; font-style: italic; }
+.change-item small {
+  display: block;
+  margin-top: 7px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.notice.subtle {
+  background: #fdf6ec;
+  color: #8a5a00;
+}
+.notice.subtle b { color: #6d4600; }
 
 /* Two stacked actions at the bottom of the detail screen. */
 .detail-actions { display: grid; gap: 9px; }
@@ -768,6 +893,9 @@ label.field-label,
 /* Green = clocked live by the timer. Grey = typed in afterwards.
    Trust rule R1: these two must never look the same. */
 .status.active { background: #e7f8f2; color: #168a69; }
+/* Amber = corrected. Never hidden, on the tutor's screen or the
+   parent's summary — that openness is the product. */
+.status.edited { background: #fdf0e0; color: #b26a00; }
 
 /* The date field needs an explicit height; iOS renders it short. */
 input[type="date"].field {

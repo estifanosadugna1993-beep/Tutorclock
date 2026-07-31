@@ -4,7 +4,7 @@ A trust-first time tracker for private tutors. Run a timer during a lesson,
 then send the parent a session summary they can trust — because the log shows
 everything, including your honest corrections.
 
-**Status: Step 3 of 7 — lesson history and manual entry.**
+**Status: Step 4 of 7 — the trust trail.**
 
 ---
 
@@ -56,11 +56,11 @@ will clear it too. Real backup/export arrives with the summary step.
   saved as `manual` and badged as such
 - Everything persists to the device and survives a restart
 - Installs to a phone home screen and opens offline
+- **Correct a lesson without erasing anything.** Tap a lesson to see it in
+  full, then correct its length with a reason. The original is kept forever
 
-Not built yet, in build-plan order: the edit/trust trail (Step 4) and the
-summary export (Step 5). Lessons can be added but not yet corrected — because
-a correction has to *append* to the record rather than overwrite it, which is
-exactly what Step 4 builds.
+Not built yet: the summary export (Step 5), which turns a date range into a
+clean PDF/image for a parent and locks the lessons it includes.
 
 ### Live vs manual
 
@@ -68,11 +68,31 @@ Every lesson carries a badge, and the two can never be confused:
 
 - **LIVE** (green) — the timer actually ran for this lesson.
 - **MANUAL** (grey) — it was typed in afterwards.
+- **EDITED** (amber) — it has been corrected at least once.
 
 That distinction is trust rule R1 and it is stored, not just displayed. A
 parent looking at a summary can see which lessons were clocked in real time
 and which were entered from memory. Hiding that would defeat the point of
 the whole app.
+
+### How a correction works
+
+Correcting a lesson never overwrites it. Saying "this was 65 minutes, not 75"
+does two things at once:
+
+1. the lesson's length becomes 65 minutes, and
+2. an **Edit** record is appended: old value, new value, the moment of the
+   change, and the reason you gave.
+
+Because edits are only ever appended, `edits[0].oldValue` is by definition
+what the lesson said originally — no matter how many times it is corrected
+afterwards. The lesson screen shows the whole chain, and the list shows
+"Adjusted from 1h 15m" underneath.
+
+That is the entire product in one mechanism. A locked log would be *less*
+believable, because real lessons are messy; "started 8 minutes late, forgot
+to press start" shown openly reads as honesty. The tutor is never trapped,
+and the parent is never misled.
 
 ### How the crash-safe timer works
 

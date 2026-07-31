@@ -25,6 +25,9 @@ import {
   sessionsFor,
   totalsFor,
   addManualSession,
+  getSession,
+  originalNetSeconds,
+  correctSessionLength,
   getActive,
   netSecondsOf,
   isPaused,
@@ -105,6 +108,14 @@ function dayLabel(timestamp) {
   });
 }
 
+/* "31 Jul 2026, 14:32" — for stamping when a correction was made. */
+function fullDateTime(timestamp) {
+  return new Date(timestamp).toLocaleString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit',
+  });
+}
+
 /* yyyy-mm-dd for a <input type="date">, in local time. */
 function toDateInput(timestamp) {
   const d = new Date(timestamp);
@@ -132,6 +143,7 @@ const icon = {
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>',
   stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
   pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
+  arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
 };
 
 /* ------------------------------------------------------------
@@ -198,6 +210,9 @@ function render() {
   if ((screen.name === 'student' || screen.name === 'addManual') && !getStudent(screen.id)) {
     screen = { name: 'dashboard' };
   }
+  if ((screen.name === 'session' || screen.name === 'correct') && !getSession(screen.id)) {
+    screen = { name: 'dashboard' };
+  }
 
   if (screen.name === 'dashboard') app.innerHTML = Dashboard();
   else if (screen.name === 'addStudent') app.innerHTML = StudentForm(null);
@@ -205,6 +220,8 @@ function render() {
   else if (screen.name === 'timer') app.innerHTML = TimerScreen();
   else if (screen.name === 'student') app.innerHTML = StudentDetail(getStudent(screen.id));
   else if (screen.name === 'addManual') app.innerHTML = ManualForm(getStudent(screen.id));
+  else if (screen.name === 'session') app.innerHTML = SessionDetail(getSession(screen.id));
+  else if (screen.name === 'correct') app.innerHTML = CorrectForm(getSession(screen.id));
   else app.innerHTML = Dashboard();
 
   wireUp();
@@ -424,6 +441,7 @@ function StudentDetail(student) {
 
 function sessionRow(session, student) {
   const isManual = session.entryType === 'manual';
+  const isEdited = session.edits.length > 0;
   const amount = student.hourlyRate > 0
     ? money((session.netSeconds / 3600) * student.hourlyRate, student.currency)
     : '';
@@ -436,17 +454,205 @@ function sessionRow(session, student) {
   }
   const detail = bits.join(' · ');
 
+  /* R3 in miniature: a corrected lesson says so right here, with
+     what it used to be. The tutor sees exactly what the parent
+     will see - no hidden state. */
+  const adjusted = isEdited
+    ? `<p class="session-adjusted">Adjusted from ${esc(durationText(originalNetSeconds(session)))}</p>`
+    : '';
+
   return `
-    <div class="session-row">
-      <div class="session-main">
-        <div class="session-top">
+    <button class="session-row" data-action="open-session" data-id="${esc(session.id)}">
+      <span class="session-main">
+        <span class="session-top">
           <b>${esc(durationText(session.netSeconds))}</b>
           <span class="status ${isManual ? '' : 'active'}">${isManual ? 'Manual' : 'Live'}</span>
-        </div>
+          ${isEdited ? '<span class="status edited">Edited</span>' : ''}
+        </span>
         <small>${esc(detail)}</small>
-        ${session.note ? `<p class="session-note">${esc(session.note)}</p>` : ''}
+        ${session.note ? `<span class="session-note">${esc(session.note)}</span>` : ''}
+        ${adjusted}
+      </span>
+      ${amount ? `<span class="session-amount">${esc(amount)}</span>` : ''}
+      <span class="chevron">${icon.chevron}</span>
+    </button>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen — one lesson in full, including its trust trail
+   ------------------------------------------------------------ */
+
+function SessionDetail(session) {
+  const student = getStudent(session.studentId);
+  const isManual = session.entryType === 'manual';
+  const isEdited = session.edits.length > 0;
+
+  const pausedSeconds = session.pauses.reduce(
+    (sum, p) => sum + Math.max(0, (p.resumedAt - p.pausedAt)), 0) / 1000;
+  const wallSeconds = (session.endedAt - session.startedAt) / 1000;
+
+  const amount = student && student.hourlyRate > 0
+    ? money((session.netSeconds / 3600) * student.hourlyRate, student.currency)
+    : '';
+
+  /* A manual entry has no real start and end - the timer never ran -
+     so showing invented clock times would be dishonest. Show only
+     what is actually known. */
+  const breakdown = isManual
+    ? `
+      ${row('Day', dayLabel(session.startedAt))}
+      ${row('Length entered', durationText(session.netSeconds))}
+    `
+    : `
+      ${row('Started', timeOfDay(session.startedAt))}
+      ${row('Ended', timeOfDay(session.endedAt))}
+      ${row('Wall clock', durationText(wallSeconds))}
+      ${row('Breaks', session.pauses.length === 0
+          ? 'None'
+          : `${session.pauses.length} · ${durationText(pausedSeconds)} not billed`)}
+      ${row('Billable', durationText(session.netSeconds), true)}
+    `;
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="back-to-student"
+                data-id="${esc(session.studentId)}" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>${esc(dayLabel(session.startedAt))}</h1>
+          <p>${esc(student ? student.name : 'Lesson')}</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="lesson-head">
+          <div class="lesson-length">${esc(durationText(session.netSeconds))}</div>
+          <div class="lesson-badges">
+            <span class="status ${isManual ? '' : 'active'}">${isManual ? 'Manual' : 'Live'}</span>
+            ${isEdited ? '<span class="status edited">Edited</span>' : ''}
+          </div>
+          ${amount ? `<div class="lesson-amount">${esc(amount)}</div>` : ''}
+        </div>
+
+        <div class="breakdown">${breakdown}</div>
+
+        ${session.note ? `
+          <div class="list-heading">Note</div>
+          <div class="card note-card">${esc(session.note)}</div>
+        ` : ''}
+
+        ${isEdited ? editHistory(session) : ''}
       </div>
-      ${amount ? `<div class="session-amount">${esc(amount)}</div>` : ''}
+
+      <div class="screen-actions">
+        <button class="secondary" data-action="correct" data-id="${esc(session.id)}">
+          Correct this lesson
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function row(label, value, strong = false) {
+  return `
+    <div class="breakdown-row">
+      <span>${esc(label)}</span>
+      <b class="${strong ? 'is-strong' : ''}">${esc(value)}</b>
+    </div>
+  `;
+}
+
+/* The trust trail itself: every correction ever made, oldest first,
+   with the original value still plainly visible. */
+function editHistory(session) {
+  return `
+    <div class="list-heading">Corrections</div>
+    <div class="notice subtle">
+      Originally <b>${esc(durationText(originalNetSeconds(session)))}</b>.
+      Every change is kept and shown to the parent &mdash; nothing here is erased.
+    </div>
+    <div class="change-list">
+      ${session.edits.map((edit) => `
+        <div class="change-item">
+          <div class="change-values">
+            <span class="from">${esc(durationText(edit.oldValue))}</span>
+            ${icon.arrow}
+            <span class="to">${esc(durationText(edit.newValue))}</span>
+          </div>
+          ${edit.reason
+            ? `<p class="change-reason">&ldquo;${esc(edit.reason)}&rdquo;</p>`
+            : '<p class="change-reason none">No reason given</p>'}
+          <small>${esc(fullDateTime(edit.editedAt))}</small>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen — correct a lesson
+   ------------------------------------------------------------ */
+
+function CorrectForm(session) {
+  const student = getStudent(session.studentId);
+  const currentMinutes = Math.round(session.netSeconds / 60);
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="open-session"
+                data-id="${esc(session.id)}" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>Correct lesson</h1>
+          <p>${esc(student ? student.name : '')} &middot; ${esc(dayLabel(session.startedAt))}</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="notice">
+          This lesson is currently <b>${esc(durationText(session.netSeconds))}</b>.
+          Your correction is saved openly: the parent's summary will show
+          the original length and your reason alongside the new one.
+          <b>Nothing is erased.</b>
+        </div>
+
+        <form class="form" id="correct-form" autocomplete="off">
+          <label class="field-label">
+            What should it be?
+            <span class="field-wrap">
+              <input class="field" id="new-minutes" inputmode="numeric"
+                     value="${esc(String(currentMinutes))}" maxlength="4">
+              <span class="field-suffix">minutes</span>
+            </span>
+            <span class="field-hint" id="change-hint"></span>
+          </label>
+
+          <label class="field-label">
+            <span>Reason <span class="label-note">(shown to the parent)</span></span>
+            <input class="field" id="reason" maxlength="120"
+                   placeholder="e.g. ended early, kid unwell">
+            <span class="field-hint">
+              Optional, but a reason is what turns a correction into
+              something a parent trusts.
+            </span>
+          </label>
+        </form>
+      </div>
+
+      <div class="screen-actions">
+        <button class="primary" data-action="save-correction"
+                data-id="${esc(session.id)}" disabled>
+          Save correction
+        </button>
+        <button class="secondary" data-action="open-session" data-id="${esc(session.id)}">
+          Cancel
+        </button>
+      </div>
     </div>
   `;
 }
@@ -789,6 +995,14 @@ function wireUp() {
     } else if (action === 'save-manual') {
       saveManualSession(trigger.dataset.id);
 
+    // ---- the trust trail ----
+    } else if (action === 'open-session') {
+      go({ name: 'session', id: trigger.dataset.id });
+    } else if (action === 'correct') {
+      go({ name: 'correct', id: trigger.dataset.id });
+    } else if (action === 'save-correction') {
+      saveCorrection(trigger.dataset.id);
+
     // ---- timer ----
     } else if (action === 'start-session') {
       const result = startSession(trigger.dataset.id);
@@ -821,6 +1035,7 @@ function wireUp() {
   if (note) note.focus();
 
   wireManualForm();
+  wireCorrectForm();
 
   const form = document.getElementById('student-form');
   if (!form) return;
@@ -974,6 +1189,89 @@ function saveManualSession(studentId) {
 
   go({ name: 'student', id: studentId });
   toast(`${durationText(result.session.netSeconds)} added as manual`);
+}
+
+/* The correct-a-lesson form. */
+function wireCorrectForm() {
+  const form = document.getElementById('correct-form');
+  if (!form) return;
+
+  const session = getSession(screen.id);
+  const minutes = document.getElementById('new-minutes');
+  const hint = document.getElementById('change-hint');
+  const saveButton = app.querySelector('[data-action="save-correction"]');
+
+  const refresh = () => {
+    const mins = Number.parseFloat(minutes.value);
+    const valid = Number.isFinite(mins) && mins > 0;
+    const newSeconds = valid ? Math.round(mins * 60) : 0;
+    const changed = valid && newSeconds !== session.netSeconds;
+
+    saveButton.disabled = !changed;
+
+    // Spell the change out before it is committed, so a slip of the
+    // thumb is obvious rather than silently saved.
+    if (!valid) {
+      hint.textContent = 'Enter how many minutes it should be.';
+    } else if (!changed) {
+      hint.textContent = 'That is already its length.';
+    } else {
+      const diff = newSeconds - session.netSeconds;
+      const direction = diff > 0 ? 'longer' : 'shorter';
+      hint.textContent =
+        `${durationText(session.netSeconds)} → ${durationText(newSeconds)}` +
+        ` · ${durationText(Math.abs(diff))} ${direction}`;
+    }
+  };
+
+  minutes.oninput = () => {
+    const cleaned = minutes.value.replace(/[^0-9]/g, '');
+    if (cleaned !== minutes.value) minutes.value = cleaned;
+    refresh();
+  };
+
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    saveCorrection(saveButton.dataset.id);
+  };
+
+  refresh();
+  minutes.focus();
+  minutes.select();
+}
+
+function saveCorrection(sessionId) {
+  const minutes = document.getElementById('new-minutes');
+  const reason = document.getElementById('reason');
+  if (!minutes) return;
+
+  const session = getSession(sessionId);
+
+  /* R4: a lesson already sent to a parent can still be corrected -
+     the tutor is not trapped - but it takes a deliberate extra
+     confirmation, and the change is logged either way. Nothing is
+     locked yet; locking arrives with the summary in Step 5. */
+  if (session && session.locked) {
+    const sure = window.confirm(
+      'This lesson was already included in a summary you sent.\n\n' +
+      'You can still correct it, and the correction will be recorded ' +
+      'and shown. Continue?'
+    );
+    if (!sure) return;
+  }
+
+  const result = correctSessionLength(sessionId, {
+    minutes: minutes.value,
+    reason: reason ? reason.value : '',
+  });
+
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  go({ name: 'session', id: sessionId });
+  toast('Correction saved and logged');
 }
 
 /* Stop the timer and save the lesson. */

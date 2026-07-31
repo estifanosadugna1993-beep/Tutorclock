@@ -465,6 +465,81 @@ export function discardSession() {
    Reading sessions
    ============================================================ */
 
+/** One saved lesson by id. */
+export function getSession(id) {
+  ensureLoaded();
+  return data.sessions.find((s) => s.id === id) || null;
+}
+
+/**
+ * What this lesson said before anyone corrected it.
+ *
+ * The first Edit's oldValue is the original by definition, because
+ * edits are only ever appended - so edits[0] always holds the value
+ * the lesson had when it was first saved.
+ */
+export function originalNetSeconds(session) {
+  if (!session.edits || session.edits.length === 0) return session.netSeconds;
+  return session.edits[0].oldValue;
+}
+
+/**
+ * Correct how long a lesson was.
+ *
+ * TRUST RULE R2 - the spine of this whole app:
+ * this NEVER quietly overwrites. It changes the value AND appends an
+ * Edit recording what it used to be, what it became, when the change
+ * was made, and why. Nothing is erased, so the parent's summary can
+ * later say "1h 05m (adjusted from 1h 15m - 'ended early, kid
+ * unwell')".
+ *
+ * A tutor who corrects an honest mistake should look honest. That is
+ * only possible if the original survives.
+ */
+export function correctSessionLength(sessionId, { minutes, reason = '' }) {
+  ensureLoaded();
+
+  const index = data.sessions.findIndex((s) => s.id === sessionId);
+  if (index === -1) return { ok: false, error: 'That lesson no longer exists.' };
+
+  const before = data.sessions[index];
+
+  const mins = Number.parseFloat(minutes);
+  if (!Number.isFinite(mins) || mins <= 0) {
+    return { ok: false, error: 'Enter how many minutes it should be.' };
+  }
+  if (mins > MAX_MANUAL_MINUTES) {
+    return { ok: false, error: 'That is longer than a whole day - check the minutes.' };
+  }
+
+  const newValue = Math.round(mins * 60);
+  if (newValue === before.netSeconds) {
+    return { ok: false, error: 'That is already its length.' };
+  }
+
+  const edit = {
+    editedAt: Date.now(),
+    field: 'netSeconds',
+    oldValue: before.netSeconds,
+    newValue,
+    reason: String(reason || '').trim(),
+  };
+
+  // Build a new object rather than mutating, so a failed write can
+  // be rolled back to exactly what was there before.
+  data.sessions[index] = {
+    ...before,
+    netSeconds: newValue,
+    edits: [...before.edits, edit],
+  };
+
+  if (!writeToDisk()) {
+    data.sessions[index] = before;
+    return { ok: false, error: 'Could not save the correction.' };
+  }
+  return { ok: true, session: data.sessions[index] };
+}
+
 /** Finished sessions for one student, newest first. */
 export function sessionsFor(studentId) {
   ensureLoaded();
