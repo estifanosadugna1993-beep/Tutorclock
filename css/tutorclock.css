@@ -190,11 +190,13 @@ button { cursor: pointer; }
   box-shadow: 0 3px 14px #ed825c1f;
 }
 
-/* The tappable part of the row: opens the student. */
+/* Nearly the whole row is one big button that starts the lesson.
+   Tapping a student IS starting their session - that is the action
+   done every lesson, so it gets the biggest possible target. */
 .row-main {
   display: flex;
   align-items: center;
-  gap: 13px;
+  gap: 12px;
   flex: 1;
   min-width: 0;
   border: 0;
@@ -203,27 +205,47 @@ button { cursor: pointer; }
   text-align: left;
   color: inherit;
   border-radius: 11px;
-  transition: transform 0.12s;
+  transition: transform 0.12s, opacity 0.2s;
 }
-.row-main:active { transform: scale(0.98); }
+.row-main:active:not(:disabled) { transform: scale(0.98); }
+.row-main:disabled { opacity: 0.4; cursor: not-allowed; }
 
-/* The Start button. Deliberately the loudest thing on the row -
-   this is the one control used mid-lesson with a kid waiting. */
-.start-btn {
+/* The Start pill. Not a separate button - it is a label inside the
+   row button, so it shows what the tap does without shrinking the
+   target down to pill-size. */
+.row-start {
   flex: none;
-  border: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   border-radius: 11px;
   background: var(--purple);
   color: #fff;
   font-weight: 750;
-  font-size: 14px;
-  padding: 0 17px;
-  height: 44px;
-  transition: background 0.2s, opacity 0.2s;
+  font-size: 13.5px;
+  padding: 0 15px;
+  height: 42px;
 }
-.start-btn:hover:not(:disabled) { background: var(--purple-dark); }
-.start-btn:disabled { opacity: 0.3; cursor: not-allowed; }
-.start-btn.is-running { background: var(--orange); }
+.row-start svg { width: 12px; }
+.row-start.is-running { background: var(--orange); }
+
+/* Editing a name or rate is the rare action, so it gets the small
+   quiet control at the edge. */
+.edit-btn {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: none;
+  border-radius: 11px;
+  color: #b4b2c2;
+  display: grid;
+  place-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+.edit-btn svg { width: 17px; }
+.edit-btn:hover { background: #f4f3f8; color: var(--muted); }
 
 /* the coloured initial — harvested .person > span, made bigger for thumbs */
 .avatar {
@@ -256,10 +278,15 @@ button { cursor: pointer; }
   text-overflow: ellipsis;
 }
 
+/* One line, truncated rather than wrapped, so every row is the
+   same height however long the name or rate is. */
 .student-row small {
   font-size: 12px;
   color: var(--muted);
   margin-top: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .chevron { width: 17px; color: #c3c1cf; flex: none; }
@@ -702,6 +729,19 @@ label.field-label,
     border-right: 1px solid var(--line);
     background: var(--canvas);
   }
+}
+
+/* Very narrow phones (older/smaller handsets). The Start pill and
+   the pencil were squeezing student names down to "Me...", so on
+   these screens everything else gives up room to the name. */
+@media (max-width: 400px) {
+  .student-row { gap: 8px; padding: 9px 8px 9px 9px; }
+  .row-main { gap: 9px; }
+  .avatar { width: 40px; height: 40px; border-radius: 12px; font-size: 17px; }
+  .row-start { padding: 0 11px; font-size: 12.5px; height: 40px; }
+  .row-start svg { display: none; }
+  .edit-btn { width: 32px; height: 32px; }
+  .edit-btn svg { width: 15px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

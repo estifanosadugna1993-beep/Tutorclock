@@ -102,6 +102,7 @@ const icon = {
   play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.87l11-6.5a1 1 0 0 0 0-1.74l-11-6.5A1 1 0 0 0 8 5.5z"/></svg>',
   pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1.2"/><rect x="14" y="5" width="4" height="14" rx="1.2"/></svg>',
   stop: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>',
+  pencil: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/></svg>',
 };
 
 /* ------------------------------------------------------------
@@ -245,30 +246,43 @@ function studentRow(student, active) {
   const someoneElseRunning = Boolean(active && !isRunning);
 
   const week = weekSecondsFor(student.id);
-  const rate = student.hourlyRate > 0
-    ? `${money(student.hourlyRate, student.currency)}/hr`
-    : 'No rate set';
-  const weekText = week > 0 ? `${durationText(week)} this week` : 'Nothing this week';
 
+  /* Keep this line short enough to stay on one line on a phone.
+     When there is nothing logged this week we simply leave that
+     part out rather than spending the width saying so. */
+  const parts = [];
+  if (student.archived) parts.push('Archived');
+  if (week > 0) parts.push(`${durationText(week)} this week`);
+  parts.push(student.hourlyRate > 0
+    ? `${money(student.hourlyRate, student.currency)}/hr`
+    : 'No rate set');
+  const meta = parts.join(' · ');
+
+  /* The whole row starts the lesson. Starting a timer is the thing
+     you do every single lesson, so it gets the big thumb target;
+     editing a name or rate is rare and sits behind the small
+     pencil instead. */
   return `
     <div class="student-row ${isRunning ? 'is-running' : ''}">
-      <button class="row-main" data-action="edit-student" data-id="${esc(student.id)}">
+      <button class="row-main"
+              data-action="${isRunning ? 'open-timer' : 'start-session'}"
+              data-id="${esc(student.id)}"
+              ${someoneElseRunning ? 'disabled' : ''}>
         <span class="avatar" style="background:${esc(student.color)}">
           ${esc(initialOf(student.name))}
         </span>
         <span class="row-text">
           <b>${esc(student.name)}</b>
-          <small>${esc(weekText)} &middot; ${esc(rate)}</small>
+          <small>${esc(meta)}</small>
+        </span>
+        <span class="row-start ${isRunning ? 'is-running' : ''}">
+          ${isRunning ? 'Open' : `${icon.play} Start`}
         </span>
       </button>
 
-      ${student.archived ? '<span class="status archived">Archived</span>' : ''}
-
-      <button class="start-btn ${isRunning ? 'is-running' : ''}"
-              data-action="${isRunning ? 'open-timer' : 'start-session'}"
-              data-id="${esc(student.id)}"
-              ${someoneElseRunning ? 'disabled' : ''}>
-        ${isRunning ? 'Open' : 'Start'}
+      <button class="edit-btn" data-action="edit-student" data-id="${esc(student.id)}"
+              aria-label="Edit ${esc(student.name)}">
+        ${icon.pencil}
       </button>
     </div>
   `;
