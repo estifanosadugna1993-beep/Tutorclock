@@ -444,8 +444,10 @@ function StudentDetail(student) {
             <button class="secondary" data-action="add-manual" data-id="${esc(student.id)}">
               ${icon.plus} Add past
             </button>
-            <button class="secondary" data-action="open-summary" data-id="${esc(student.id)}"
-                    ${sessions.length === 0 ? 'disabled' : ''}>
+            <!-- Always enabled. An empty summary explains itself
+                 ("no lessons in this period") and the range picker
+                 is right there; a dead button just looks broken. -->
+            <button class="secondary" data-action="open-summary" data-id="${esc(student.id)}">
               ${icon.receipt} Summary
             </button>
           </div>

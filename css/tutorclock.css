@@ -933,6 +933,14 @@ button svg,
   align-items: center;
   justify-content: center;
   gap: 8px;
+  transition: opacity 0.2s;
+}
+/* Without this a disabled secondary button looks completely normal
+   and simply does nothing when tapped, which reads as the app being
+   broken. A disabled control must look disabled. */
+.secondary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .text-button {
