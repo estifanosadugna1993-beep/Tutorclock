@@ -9,11 +9,16 @@
    Shape on disk (one JSON blob under one key):
 
      {
-       version:  1,
-       students: [ Student, ... ],
-       sessions: [ Session, ... ],
-       active:   ActiveSession | null
+       version:      1,
+       students:     [ Student, ... ],
+       sessions:     [ Session, ... ],
+       active:       ActiveSession | null,
+       changedAt:    timestamp of the last write
+       lastBackupAt: timestamp of the last backup taken
      }
+
+   changedAt and lastBackupAt describe THIS DEVICE, not the
+   records, so they are deliberately left out of a backup file.
 
    Student (from Section 3 of the build plan):
      id         unique id
@@ -86,7 +91,14 @@ function newId() {
 }
 
 function emptyData() {
-  return { version: SCHEMA_VERSION, students: [], sessions: [], active: null };
+  return {
+    version: SCHEMA_VERSION,
+    students: [],
+    sessions: [],
+    active: null,
+    changedAt: null,
+    lastBackupAt: null,
+  };
 }
 
 /* ------------------------------------------------------------
@@ -125,6 +137,8 @@ function readFromDisk() {
       students: Array.isArray(parsed.students) ? parsed.students : [],
       sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
       active: isUsableActive(parsed.active) ? parsed.active : null,
+      changedAt: Number.isFinite(parsed.changedAt) ? parsed.changedAt : null,
+      lastBackupAt: Number.isFinite(parsed.lastBackupAt) ? parsed.lastBackupAt : null,
     };
   } catch (err) {
     // The stored JSON is corrupt. Do NOT wipe it - keep a copy
@@ -137,13 +151,26 @@ function readFromDisk() {
   }
 }
 
-function writeToDisk() {
+/**
+ * Save the whole blob.
+ *
+ * `touch` stamps changedAt, which is how the app knows there is work
+ * that has not been backed up yet. The two writes that are ABOUT
+ * backups - taking one, and restoring one - pass touch:false and set
+ * changedAt themselves, because otherwise saving a backup would
+ * immediately mark the data as changed since that backup.
+ */
+function writeToDisk({ touch = true } = {}) {
+  const previousChangedAt = data.changedAt;
+  if (touch) data.changedAt = Date.now();
+
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     storageBroken = false;
     return true;
   } catch (err) {
     console.error('TutorClock: could not save', err);
+    data.changedAt = previousChangedAt; // nothing was written, so nothing changed
     storageBroken = true;
     return false;
   }
@@ -695,4 +722,400 @@ export function weekSecondsFor(studentId, at = Date.now()) {
     total += netSecondsOf(active, at);
   }
   return total;
+}
+
+/* ============================================================
+   Backup and restore
+   ------------------------------------------------------------
+   Everything above this line writes to one browser's localStorage
+   and nowhere else. Clear the site data, lose the phone, or
+   uninstall, and it is all gone with no way back. That is the one
+   failure this app cannot talk its way out of: a tutor's billing
+   record has to survive a lost phone.
+
+   So: a backup is a plain .json file the tutor keeps wherever they
+   like - Telegram Saved Messages, email to themselves, a laptop.
+   No account, no server, no sync. Just a file they own.
+
+   The file is written pretty-printed and carries a note in plain
+   English, because the person who opens it in a year will be a
+   worried tutor, not a programmer.
+   ============================================================ */
+
+const BACKUP_FORMAT = 'tutorclock-backup';
+const BACKUP_FORMAT_VERSION = 1;
+
+/* Where the pre-restore copy is kept so a mistaken restore can be
+   undone. A restore is the only destructive thing in the whole app,
+   so it gets the only safety net. */
+const STASH_KEY = STORAGE_KEY + '.before-restore';
+
+/* How long "Undo the restore" stays offered. A restore of the wrong
+   file is noticed within minutes, not weeks, and an undo button that
+   lingers for a month is just a confusing button. */
+const STASH_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+/** How much is stored right now, and when it was last backed up. */
+export function counts() {
+  ensureLoaded();
+  return {
+    students: data.students.length,
+    sessions: data.sessions.length,
+    lastBackupAt: data.lastBackupAt,
+  };
+}
+
+/** True when there is work on this device that no backup file holds. */
+export function pendingChanges() {
+  ensureLoaded();
+  if (data.students.length === 0 && data.sessions.length === 0) return false;
+  if (!data.lastBackupAt) return true;
+  if (!data.changedAt) return false; // saved before this app tracked changes
+  return data.changedAt > data.lastBackupAt;
+}
+
+/**
+ * Lessons saved since the last backup. This is the number worth
+ * putting in front of the tutor - "6 lessons since your last backup"
+ * means something, "you have unsaved changes" does not.
+ */
+export function unbackedSessionCount() {
+  ensureLoaded();
+  const since = data.lastBackupAt;
+  if (!since) return data.sessions.length;
+  return data.sessions.filter((s) => (s.createdAt || s.startedAt) > since).length;
+}
+
+/**
+ * The object that gets written to the backup file.
+ * `at` is passed in so the timestamp inside the file and the one we
+ * record as "last backed up" are the same moment.
+ */
+export function buildBackup(at = Date.now()) {
+  ensureLoaded();
+  return {
+    format: BACKUP_FORMAT,
+    formatVersion: BACKUP_FORMAT_VERSION,
+    app: 'TutorClock',
+    note: 'This is a TutorClock backup. To put it back: open TutorClock, '
+        + 'tap the shield on the home screen, then "Choose a backup file".',
+    savedAt: at,
+    savedAtText: new Date(at).toLocaleString(),
+    data: {
+      version: SCHEMA_VERSION,
+      students: data.students,
+      sessions: data.sessions,
+      active: data.active,
+    },
+  };
+}
+
+/** The backup file's contents. Indented so it is readable by a human. */
+export function exportJson(at = Date.now()) {
+  return JSON.stringify(buildBackup(at), null, 2);
+}
+
+/**
+ * Record that a backup was taken. Called only once the file has
+ * actually left the app - a cancelled share sheet is not a backup,
+ * and claiming it was would be exactly the wrong lie to tell.
+ */
+export function markBackedUp(at = Date.now()) {
+  ensureLoaded();
+
+  const previous = { lastBackupAt: data.lastBackupAt, changedAt: data.changedAt };
+  data.lastBackupAt = at;
+  data.changedAt = at;
+
+  if (!writeToDisk({ touch: false })) {
+    data.lastBackupAt = previous.lastBackupAt;
+    data.changedAt = previous.changedAt;
+    return { ok: false, error: 'Could not note the backup date on this device.' };
+  }
+  return { ok: true };
+}
+
+/* ------------------------------------------------------------
+   Reading a backup file back in
+   ------------------------------------------------------------
+   Everything coming in is treated as untrusted. It may be an old
+   version, a truncated download, or the wrong file entirely. Each
+   record is rebuilt field by field rather than trusted wholesale,
+   so a malformed backup can never put a broken object into the app.
+   ------------------------------------------------------------ */
+
+function cleanStudent(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : null;
+  const name = String(raw.name === undefined || raw.name === null ? '' : raw.name).trim();
+  if (!id || !name) return null; // without these it is not a student
+
+  const createdAt = Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now();
+
+  return {
+    id,
+    name,
+    color: typeof raw.color === 'string' && raw.color ? raw.color : STUDENT_COLORS[0],
+    hourlyRate: normaliseRate(raw.hourlyRate),
+    currency: typeof raw.currency === 'string' && raw.currency ? raw.currency : DEFAULT_CURRENCY,
+    createdAt,
+    updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : createdAt,
+    archived: Boolean(raw.archived),
+  };
+}
+
+function cleanSession(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : null;
+  const studentId = typeof raw.studentId === 'string' && raw.studentId ? raw.studentId : null;
+  const startedAt = Number.isFinite(raw.startedAt) ? raw.startedAt : null;
+  const netSeconds = Number.isFinite(raw.netSeconds) ? Math.max(0, Math.round(raw.netSeconds)) : null;
+
+  // A lesson with no id, no student, no start, or no length is not a
+  // lesson. Guessing any of those would invent a record.
+  if (!id || !studentId || startedAt === null || netSeconds === null) return null;
+
+  const pauses = Array.isArray(raw.pauses)
+    ? raw.pauses
+        .filter((p) => p && Number.isFinite(p.pausedAt))
+        .map((p) => ({
+          pausedAt: p.pausedAt,
+          resumedAt: Number.isFinite(p.resumedAt) ? p.resumedAt : p.pausedAt,
+        }))
+    : [];
+
+  const edits = Array.isArray(raw.edits)
+    ? raw.edits
+        .filter((e) => e && Number.isFinite(e.editedAt)
+                    && Number.isFinite(e.oldValue) && Number.isFinite(e.newValue))
+        .map((e) => ({
+          editedAt: e.editedAt,
+          field: 'netSeconds',
+          oldValue: e.oldValue,
+          newValue: e.newValue,
+          reason: String(e.reason || ''),
+        }))
+    : [];
+
+  const session = {
+    id,
+    studentId,
+    startedAt,
+    endedAt: Number.isFinite(raw.endedAt) ? raw.endedAt : startedAt + netSeconds * 1000,
+    pauses,
+    netSeconds,
+    /* R1 again, and note which way this falls: anything that does not
+       say 'live' becomes 'manual'. A damaged field must never upgrade
+       a typed-in lesson into one the app claims it timed. When in
+       doubt, make the smaller claim. */
+    entryType: raw.entryType === 'live' ? 'live' : 'manual',
+    note: String(raw.note || ''),
+    edits,
+    locked: Boolean(raw.locked),
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : startedAt,
+  };
+
+  if (Number.isFinite(raw.lockedAt)) session.lockedAt = raw.lockedAt;
+  return session;
+}
+
+/**
+ * Read the text of a chosen file and work out whether it is a usable
+ * backup. Nothing is written here - this only reports what the file
+ * holds, so the tutor can be shown it and decide.
+ *
+ * @returns {{ok: true, backup: object} | {ok: false, error: string}}
+ */
+export function parseBackup(text) {
+  let parsed;
+  try {
+    parsed = JSON.parse(String(text));
+  } catch (err) {
+    return { ok: false, error: 'That file is not readable. A backup is a .json file this app saved.' };
+  }
+
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: 'That file is not a TutorClock backup.' };
+  }
+
+  // Accept both the wrapped file we write and a bare data blob, so a
+  // copy of the raw localStorage value can be restored too.
+  const body = parsed.data && typeof parsed.data === 'object' ? parsed.data : parsed;
+
+  if (!Array.isArray(body.students) || !Array.isArray(body.sessions)) {
+    return { ok: false, error: 'That file is not a TutorClock backup - there are no students or lessons in it.' };
+  }
+
+  const students = [];
+  let droppedStudents = 0;
+  for (const raw of body.students) {
+    const student = cleanStudent(raw);
+    if (student) students.push(student);
+    else droppedStudents += 1;
+  }
+
+  const knownIds = new Set(students.map((s) => s.id));
+
+  const sessions = [];
+  let droppedSessions = 0;
+  let orphans = 0;
+  for (const raw of body.sessions) {
+    const session = cleanSession(raw);
+    if (!session) { droppedSessions += 1; continue; }
+    if (!knownIds.has(session.studentId)) orphans += 1;
+    sessions.push(session);
+  }
+
+  // An empty file is far more likely to be a truncated download than
+  // something anyone meant to restore, and restoring it would wipe
+  // the phone. Refuse rather than ask.
+  if (students.length === 0 && sessions.length === 0) {
+    return { ok: false, error: 'That backup is empty - there is nothing in it to restore.' };
+  }
+
+  const active = isUsableActive(body.active) && knownIds.has(body.active.studentId)
+    ? body.active
+    : null;
+
+  return {
+    ok: true,
+    backup: {
+      savedAt: Number.isFinite(parsed.savedAt) ? parsed.savedAt : null,
+      data: { version: SCHEMA_VERSION, students, sessions, active },
+      counts: { students: students.length, sessions: sessions.length },
+      dropped: { students: droppedStudents, sessions: droppedSessions },
+      orphans,
+    },
+  };
+}
+
+/* Keep a copy of what is here now, so a restore can be undone. */
+function stashCurrent(current) {
+  try {
+    localStorage.setItem(STASH_KEY, JSON.stringify({ stashedAt: Date.now(), data: current }));
+    return true;
+  } catch (err) {
+    console.error('TutorClock: could not keep a copy before restoring', err);
+    return false;
+  }
+}
+
+/** What the undo copy holds, or null if there isn't a usable one. */
+export function stashInfo() {
+  let raw;
+  try {
+    raw = localStorage.getItem(STASH_KEY);
+  } catch (err) {
+    return null;
+  }
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || !Number.isFinite(parsed.stashedAt) || !parsed.data) return null;
+    if (Date.now() - parsed.stashedAt > STASH_LIFETIME_MS) {
+      clearStash();
+      return null;
+    }
+    return {
+      stashedAt: parsed.stashedAt,
+      expiresAt: parsed.stashedAt + STASH_LIFETIME_MS,
+      students: Array.isArray(parsed.data.students) ? parsed.data.students.length : 0,
+      sessions: Array.isArray(parsed.data.sessions) ? parsed.data.sessions.length : 0,
+    };
+  } catch (err) {
+    return null;
+  }
+}
+
+export function clearStash() {
+  try {
+    localStorage.removeItem(STASH_KEY);
+  } catch (err) { /* nothing we can do, and nothing depends on it */ }
+}
+
+/**
+ * Replace everything on this device with the contents of a backup.
+ *
+ * This is the only call in the app that destroys records, so it does
+ * two things first: it refuses while a lesson is running (that timer
+ * would vanish with no trace), and it keeps a copy of what was here
+ * so the tutor can undo it.
+ *
+ * @returns {{ok: boolean, undoable?: boolean, error?: string}}
+ */
+export function restoreBackup(backup) {
+  ensureLoaded();
+
+  if (!backup || !backup.data) return { ok: false, error: 'There is nothing to restore.' };
+  if (getActive()) {
+    return { ok: false, error: 'Stop or discard the running lesson before restoring.' };
+  }
+
+  const previous = data;
+  const undoable = stashCurrent(previous);
+
+  /* The data now on this phone is, by definition, exactly what that
+     file holds - so it counts as backed up as of the file's date.
+     Nothing to nag about the moment after a restore. */
+  const at = Number.isFinite(backup.savedAt) ? backup.savedAt : Date.now();
+
+  data = {
+    version: SCHEMA_VERSION,
+    students: backup.data.students,
+    sessions: backup.data.sessions,
+    active: backup.data.active,
+    changedAt: at,
+    lastBackupAt: at,
+  };
+
+  if (!writeToDisk({ touch: false })) {
+    data = previous;
+    clearStash();
+    return { ok: false, error: 'Could not save the restored data to this device.' };
+  }
+  return { ok: true, undoable };
+}
+
+/** Put back whatever was here before the last restore. */
+export function undoRestore() {
+  ensureLoaded();
+
+  let raw;
+  try {
+    raw = localStorage.getItem(STASH_KEY);
+  } catch (err) {
+    return { ok: false, error: 'Could not read the copy from before the restore.' };
+  }
+  if (!raw) return { ok: false, error: 'There is nothing to undo.' };
+
+  let stashed;
+  try {
+    stashed = JSON.parse(raw).data;
+  } catch (err) {
+    return { ok: false, error: 'The copy from before the restore is unreadable.' };
+  }
+  if (!stashed || !Array.isArray(stashed.students) || !Array.isArray(stashed.sessions)) {
+    return { ok: false, error: 'The copy from before the restore is unreadable.' };
+  }
+
+  const previous = data;
+  data = {
+    version: SCHEMA_VERSION,
+    students: stashed.students,
+    sessions: stashed.sessions,
+    active: isUsableActive(stashed.active) ? stashed.active : null,
+    changedAt: Number.isFinite(stashed.changedAt) ? stashed.changedAt : Date.now(),
+    lastBackupAt: Number.isFinite(stashed.lastBackupAt) ? stashed.lastBackupAt : null,
+  };
+
+  if (!writeToDisk({ touch: false })) {
+    data = previous;
+    return { ok: false, error: 'Could not undo the restore.' };
+  }
+
+  clearStash();
+  return { ok: true, students: data.students.length, sessions: data.sessions.length };
 }

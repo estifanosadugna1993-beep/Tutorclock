@@ -155,7 +155,11 @@ button svg,
 }
 .brand-mark svg { width: 21px; }
 
-.back-button {
+/* The same square control at either end of the header: a back arrow
+   on the left of a sub-screen, the backup shield on the right of the
+   dashboard. */
+.back-button,
+.header-button {
   width: 38px;
   height: 38px;
   border: 1px solid var(--line);
@@ -166,7 +170,8 @@ button svg,
   place-items: center;
   flex: none;
 }
-.back-button svg { width: 18px; }
+.back-button svg,
+.header-button svg { width: 18px; }
 
 /* ============================================================
    Cards — harvested .card
@@ -690,6 +695,22 @@ button svg,
 }
 .notice.subtle b { color: #6d4600; }
 
+/* Used only where something really can be lost: no backup at all,
+   and the restore confirmation. */
+.notice.danger {
+  background: #fdeeed;
+  color: #96403b;
+}
+.notice.danger b { color: #7d3430; }
+
+/* "You are fine" deserves saying out loud too, or backed-up and
+   not-backed-up look the same at a glance. */
+.notice.good {
+  background: #e8f8f2;
+  color: #14775c;
+}
+.notice.good b { color: #0f6149; }
+
 /* Two stacked actions at the bottom of the detail screen. */
 .detail-actions { display: grid; gap: 9px; }
 
@@ -850,6 +871,117 @@ button svg,
 
 .action-pair { display: flex; gap: 9px; }
 .action-pair .secondary { flex: 1; }
+
+/* ============================================================
+   Backup
+   ============================================================ */
+
+/* The dashboard reminder. Styled like a card rather than an alert
+   bar: it is a standing fact about your data, not an emergency, and
+   it has to survive being seen every day without being ignored. */
+.backup-nudge {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  background: #fff;
+  border: 1px solid #f0e3d2;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+  padding: 12px 12px 12px 11px;
+  margin-bottom: 13px;
+}
+.backup-nudge:active { transform: scale(0.99); }
+
+.backup-nudge .nudge-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: #fdf3e6;
+  color: #c07a1d;
+  flex: none;
+}
+.backup-nudge .nudge-icon svg { width: 20px; }
+
+.backup-nudge .nudge-text { flex: 1; min-width: 0; display: grid; gap: 2px; }
+
+/* No nowrap/ellipsis here, unlike the student rows. A name can be
+   safely shortened to "Mer..." because the avatar and the row still
+   identify it; a warning that reads "never been b..." has lost the
+   only word that mattered. Let it take a second line instead. */
+.backup-nudge b {
+  font-size: 13.5px;
+  letter-spacing: -0.01em;
+  line-height: 1.35;
+}
+.backup-nudge small {
+  font-size: 11.5px;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* The totals sit tight to their own heading by default; on the backup
+   screen the notice underneath them is a separate thought. */
+.stat-strip + .notice { margin-top: 13px; }
+
+/* A plain explanatory block on the backup screen: a heading, some
+   prose, and usually one button. */
+.info-card {
+  background: #fff;
+  border: 1px solid #eae9f1;
+  border-radius: var(--radius);
+  box-shadow: 0 3px 12px #2d29450a;
+  padding: 15px;
+  margin-bottom: 13px;
+}
+.info-card > b { font-size: 14px; letter-spacing: -0.01em; }
+.info-card p {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--muted);
+}
+.info-card strong { color: var(--ink); font-weight: 700; }
+.info-card .secondary { margin-top: 14px; }
+
+/* Why the restore button is switched off mid-lesson. */
+.restore-blocked {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: #8a5a00 !important;
+}
+.restore-blocked svg { width: 16px; flex: none; margin-top: 1px; }
+
+/* Label and value, for "this file holds ..." */
+.compare-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #f1f0f6;
+  font-size: 13px;
+}
+.compare-row:first-of-type { margin-top: 6px; }
+.compare-row span { color: var(--muted); }
+.compare-row b { font-variant-numeric: tabular-nums; text-align: right; }
+
+.file-name {
+  font-size: 11.5px !important;
+  color: #a9a7b5 !important;
+  word-break: break-all;
+  margin-top: 10px !important;
+}
+
+/* Replacing every record you have is the one irreversible thing in
+   the app. It must not look like every other confirm button. */
+.primary.danger { background: var(--danger); }
+.primary.danger:hover { background: #b1433e; }
 
 /* ============================================================
    Print — "Save as PDF" with no PDF library.

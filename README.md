@@ -4,7 +4,8 @@ A trust-first time tracker for private tutors. Run a timer during a lesson,
 then send the parent a session summary they can trust — because the log shows
 everything, including your honest corrections.
 
-**Status: Step 5 of 7 — summary and export. The v1 feature set is complete.**
+**Status: Step 6 of 7 — in daily use. The v1 feature set is complete, plus
+backup and restore.**
 
 ---
 
@@ -37,9 +38,12 @@ This is the whole point of Step 1, so it is worth testing properly:
    has nothing to do with the server.
 
 Data is stored under the key `tutorclock.v1` in your browser's localStorage.
-Note that it is per-browser and per-device — clearing your browsing data
-will clear it too. Summaries can be exported as a picture or a PDF, but there
-is no whole-database backup yet.
+It is per-browser and per-device — **clearing your browsing data clears it
+too**. That is what the backup feature is for; take one before you ever clear
+site data.
+
+When updating the app on a phone, clear **"Cached images and files"** only.
+"Cookies and site data" wipes every student and lesson.
 
 ## What works now
 
@@ -65,9 +69,52 @@ is no whole-database backup yet.
   as a PDF** — no libraries involved either way
 - Lessons included in a sent summary are **locked**: still correctable, but
   it asks first and records the change
+- **Backup and restore.** Save everything to one file you own, and put it
+  back on any device
 
 That completes the v1 feature set from the build plan. What remains is
 Step 6: use it on real lessons for two weeks and fix what chafes.
+
+### Backup and restore
+
+Everything lives in one browser on one phone. For a billing record that is
+not good enough, so the shield on the dashboard opens a backup screen.
+
+**Saving one** writes a single `.json` file holding every student and every
+lesson, and hands it to the phone's share sheet — one tap into Telegram Saved
+Messages, which is a place a tutor already trusts and already checks. Where
+sharing files is not supported it downloads instead. The file is
+pretty-printed and carries a note in plain English, because the person
+opening it in a year will be a worried tutor, not a programmer.
+
+The date is only recorded **after the file has actually left the app**.
+Dismissing the share sheet is not a backup, and saying otherwise is exactly
+the lie that would cost someone their records.
+
+**The dashboard reminder** appears only when there are *lessons* a backup
+would not contain, and says how many. Renaming a student does not trigger it,
+and a lone student with no lessons gets no red warning — a reminder that
+fires every time you open the app stops being read within a week.
+
+**Restoring** replaces everything, so it shows both sides first: what the
+file holds, what is about to be removed, and how old the backup is. Three
+guards sit around it:
+
+- it **refuses while a lesson is running**, since that timer would vanish
+  with no record of it;
+- a copy of what was there before is kept for 24 hours, so a restore of the
+  wrong file can be **undone**;
+- restoring onto an empty phone destroys nothing, so it is deliberately *not*
+  dressed in red. Only the case that really loses records gets the alarming
+  treatment — otherwise you learn to click through red warnings.
+
+Incoming files are treated as untrusted: each record is rebuilt field by
+field rather than trusted wholesale, unreadable entries are skipped and
+counted for you, and an empty file is refused outright (far likelier to be a
+truncated download than something anyone meant to restore). One detail worth
+noting — a session whose `entryType` is damaged becomes `manual`, never
+`live`. A broken field must not upgrade a typed-in lesson into one the app
+claims it timed. When in doubt, make the smaller claim.
 
 ### Live vs manual
 
@@ -157,6 +204,10 @@ step and changed nothing visually.
 **localStorage, behind a wall.** Only `js/store.js` touches storage. Every
 screen asks it for data. If this ever outgrows localStorage, that one file
 gets rewritten and the screens do not change.
+
+**Backups are files, not an account.** No server, no sync, no sign-in. A file
+in your own chat history keeps working when this app does not, cannot be
+locked behind a password you forgot, and needs nothing to be maintained.
 
 **Phone-first CSS.** The harvested stylesheet was a desktop sidebar dashboard
 that shrank down. This one inverts that: the base styles are the phone

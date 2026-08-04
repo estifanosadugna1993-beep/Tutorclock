@@ -41,6 +41,15 @@ import {
   stopSession,
   discardSession,
   weekSecondsFor,
+  counts,
+  pendingChanges,
+  unbackedSessionCount,
+  exportJson,
+  markBackedUp,
+  parseBackup,
+  restoreBackup,
+  stashInfo,
+  undoRestore,
   STUDENT_COLORS,
   DEFAULT_CURRENCY,
 } from './store.js';
@@ -152,6 +161,10 @@ const icon = {
   arrow: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
   share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v14"/></svg>',
   receipt: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12a1 1 0 0 1 1 1v18l-3-2-2 2-2-2-2 2-2-2-3 2V3a1 1 0 0 1 1-1z"/><path d="M9 8h6M9 12h6"/></svg>',
+  shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7.5-3.8 7.5-9.6V5.4L12 2.6 4.5 5.4v6C4.5 17.2 12 21 12 21z"/><path d="M9 11.7l2.1 2.1L15.2 9.7"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>',
+  restore: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1L3 8.6"/><path d="M3 3.4v5.4h5.4"/></svg>',
+  warn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 2.6 20h18.8L12 3.5z"/><path d="M12 10v4"/><path d="M12 17.2v.1"/></svg>',
 };
 
 /* ------------------------------------------------------------
@@ -223,7 +236,12 @@ function render() {
     screen = { name: 'dashboard' };
   }
 
+  // The restore confirmation has nothing to show without a chosen file.
+  if (screen.name === 'restore' && !pendingRestore) screen = { name: 'backup' };
+
   if (screen.name === 'dashboard') app.innerHTML = Dashboard();
+  else if (screen.name === 'backup') app.innerHTML = BackupScreen();
+  else if (screen.name === 'restore') app.innerHTML = RestoreConfirm();
   else if (screen.name === 'addStudent') app.innerHTML = StudentForm(null);
   else if (screen.name === 'editStudent') app.innerHTML = StudentForm(getStudent(screen.id));
   else if (screen.name === 'timer') app.innerHTML = TimerScreen();
@@ -279,11 +297,15 @@ function Dashboard() {
             ? `${students.length} student${students.length === 1 ? '' : 's'}`
             : 'Your students'}</p>
         </div>
+        <button class="header-button" data-action="open-backup" aria-label="Backup">
+          ${icon.shield}
+        </button>
       </header>
 
       <div class="screen-body">
         ${warning}
         ${active ? liveBanner(active) : ''}
+        ${backupNudge()}
         ${body}
       </div>
 
@@ -293,6 +315,41 @@ function Dashboard() {
         </button>
       </div>
     </div>
+  `;
+}
+
+/**
+ * The "back this up" line on the dashboard.
+ *
+ * Deliberately narrow about when it appears: only when there are
+ * LESSONS a backup file would not contain. Renaming a student does
+ * not trigger it. A reminder that shows every single time you open
+ * the app stops being read within a week, and then it is worse than
+ * nothing - so it only speaks when there is something real to lose,
+ * and it says exactly how much.
+ */
+function backupNudge() {
+  const unbacked = unbackedSessionCount();
+  if (unbacked === 0) return '';
+
+  const { lastBackupAt } = counts();
+
+  /* Short enough to fit a narrow phone on one line. The headline of a
+     warning must never be the thing that gets cut off - "Your lessons
+     have never been b..." tells you nothing. */
+  const headline = lastBackupAt
+    ? `${unbacked} ${unbacked === 1 ? 'lesson' : 'lessons'} not backed up`
+    : 'Never backed up';
+
+  return `
+    <button class="backup-nudge" data-action="open-backup">
+      <span class="nudge-icon">${icon.shield}</span>
+      <span class="nudge-text">
+        <b>${esc(headline)}</b>
+        <small>They only exist on this phone. Tap to save a copy.</small>
+      </span>
+      <span class="chevron">${icon.chevron}</span>
+    </button>
   `;
 }
 
@@ -1139,6 +1196,285 @@ function StudentForm(student) {
   `;
 }
 
+/* ============================================================
+   Screen 6 — Backup
+   ------------------------------------------------------------
+   The app's honest admission: everything lives in one browser on
+   one phone, and that is not good enough for money records. This
+   screen is where the tutor gets a file they own.
+
+   No account, no server, no sync. A file in Telegram Saved
+   Messages is something a tutor already understands and already
+   trusts, and it keeps working when this app does not.
+   ------------------------------------------------------------ */
+
+/* A parsed backup waiting to be confirmed, and the name of the file
+   it came from. Held here rather than in `screen` because it is a
+   whole object, not a routing detail. */
+let pendingRestore = null;
+let pendingRestoreName = '';
+
+/* Sharing a file needs both the API and the browser's agreement that
+   this particular file can be shared, which we can only test with a
+   real File in hand. This is the cheap first half of that check. */
+function canShareFiles() {
+  return Boolean(navigator.share && navigator.canShare);
+}
+
+/* "Never", "Today, 14:32", or "2 Aug 2026, 14:32". */
+function backupWhen(timestamp) {
+  if (!timestamp) return 'Never';
+  const day = dayLabel(timestamp);
+  return day === 'Today' || day === 'Yesterday'
+    ? `${day}, ${timeOfDay(timestamp)}`
+    : fullDateTime(timestamp);
+}
+
+function BackupScreen() {
+  const info = counts();
+  const unbacked = unbackedSessionCount();
+  const stash = stashInfo();
+  const active = getActive();
+  const hasData = info.students > 0 || info.sessions > 0;
+
+  /* Say plainly where things stand. Three states, three different
+     things worth knowing - and the good one is worth saying out
+     loud too, so "backed up" is a state you can actually see. */
+  let status;
+  if (info.sessions === 0) {
+    /* Lessons are the irreplaceable part. A student's name and rate can
+       be typed again in ten seconds, so having no backup of just those
+       is not worth a red warning - crying wolf here is how a real
+       warning later gets ignored. */
+    status = `
+      <div class="notice">
+        <b>No lessons logged yet.</b>
+        ${hasData
+          ? 'Your student list can be backed up now, but the records worth protecting are the lessons. Come back once you have taught a few.'
+          : 'Once you have logged a lesson, come back and save a copy somewhere safe.'}
+      </div>`;
+  } else if (!info.lastBackupAt) {
+    status = `
+      <div class="notice danger">
+        <b>No backup yet.</b> Everything you have logged lives only in this
+        browser. If this phone is lost, or its site data is cleared, there is
+        no copy anywhere and no way to get it back.
+      </div>`;
+  } else if (unbacked > 0) {
+    status = `
+      <div class="notice subtle">
+        <b>${unbacked} ${unbacked === 1 ? 'lesson is' : 'lessons are'} not in a backup.</b>
+        Your last one was ${esc(backupWhen(info.lastBackupAt))}.
+      </div>`;
+  } else if (pendingChanges()) {
+    status = `
+      <div class="notice subtle">
+        <b>Some details have changed</b> since your last backup
+        ${esc(backupWhen(info.lastBackupAt))}. No new lessons, but a fresh
+        copy would still be more accurate.
+      </div>`;
+  } else {
+    status = `
+      <div class="notice good">
+        <b>Backed up.</b> Nothing has changed since
+        ${esc(backupWhen(info.lastBackupAt))}.
+      </div>`;
+  }
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="go-dashboard" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>Backup</h1>
+          <p>Keep a copy you own</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="stat-strip">
+          <div class="stat-cell">
+            <b>${info.students}</b>
+            <small>${info.students === 1 ? 'Student' : 'Students'}</small>
+          </div>
+          <div class="stat-cell">
+            <b>${info.sessions}</b>
+            <small>${info.sessions === 1 ? 'Lesson' : 'Lessons'}</small>
+          </div>
+          <div class="stat-cell">
+            <b>${info.lastBackupAt ? esc(dayLabel(info.lastBackupAt)) : 'Never'}</b>
+            <small>Backed up</small>
+          </div>
+        </div>
+
+        ${status}
+
+        <div class="info-card">
+          <b>What a backup is</b>
+          <p>
+            One small file holding every student and every lesson. Send it to
+            yourself — Telegram Saved Messages works well — and it is safe from
+            anything that happens to this phone.
+          </p>
+          <p>
+            Do it after any week that mattered. It takes two taps.
+          </p>
+        </div>
+
+        <div class="info-card">
+          <b>Restore from a backup</b>
+          <p>
+            Put a backup file back — on a new phone, or after this one lost its
+            data. This <strong>replaces</strong> everything currently in the app.
+          </p>
+          ${active ? `
+            <p class="restore-blocked">
+              ${icon.warn} A lesson is running. Stop or discard it before restoring,
+              so the timer is not lost without a record.
+            </p>
+          ` : ''}
+          <input type="file" id="restore-file" accept=".json,application/json"
+                 style="display:none">
+          <button class="secondary" data-action="pick-restore" ${active ? 'disabled' : ''}>
+            ${icon.restore} Choose a backup file
+          </button>
+        </div>
+
+        ${stash ? `
+          <div class="info-card">
+            <b>Undo the last restore</b>
+            <p>
+              Before that restore, this phone held ${stash.students}
+              ${stash.students === 1 ? 'student' : 'students'} and ${stash.sessions}
+              ${stash.sessions === 1 ? 'lesson' : 'lessons'}. That copy is still here
+              until ${esc(backupWhen(stash.expiresAt))}, in case you restored the
+              wrong file.
+            </p>
+            <button class="secondary" data-action="undo-restore">
+              Put back what was here before
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      <div class="screen-actions">
+        ${canShareFiles() ? `
+          <button class="primary" data-action="share-backup" ${hasData ? '' : 'disabled'}>
+            ${icon.share} Send a backup to a chat
+          </button>
+          <button class="secondary" data-action="download-backup" ${hasData ? '' : 'disabled'}>
+            ${icon.download} Download the file instead
+          </button>
+        ` : `
+          <button class="primary" data-action="download-backup" ${hasData ? '' : 'disabled'}>
+            ${icon.download} Download a backup
+          </button>
+        `}
+      </div>
+    </div>
+  `;
+}
+
+/* ------------------------------------------------------------
+   Screen — confirm a restore
+   ------------------------------------------------------------
+   The only screen in this app that offers to destroy records, so
+   it shows both sides of the trade before asking: what the file
+   holds, and what is about to be replaced. No number here is
+   rounded or softened.
+   ------------------------------------------------------------ */
+
+function RestoreConfirm() {
+  const backup = pendingRestore;
+  const now = counts();
+  const skipped = backup.dropped.students + backup.dropped.sessions;
+
+  /* Restoring onto an empty phone destroys nothing, and dressing that
+     up in red teaches you to click through red warnings. Only the case
+     that really loses records gets the alarming treatment. */
+  const replacing = now.students > 0 || now.sessions > 0;
+
+  return `
+    <div class="screen">
+      <header class="app-header">
+        <button class="back-button" data-action="cancel-restore" aria-label="Back">
+          ${icon.back}
+        </button>
+        <div class="head-text">
+          <h1>Restore</h1>
+          <p>Check this before replacing anything</p>
+        </div>
+      </header>
+
+      <div class="screen-body">
+        <div class="info-card">
+          <b>This file holds</b>
+          <div class="compare-row">
+            <span>Students</span><b>${backup.counts.students}</b>
+          </div>
+          <div class="compare-row">
+            <span>Lessons</span><b>${backup.counts.sessions}</b>
+          </div>
+          <div class="compare-row">
+            <span>Saved</span>
+            <b>${backup.savedAt ? esc(backupWhen(backup.savedAt)) : 'Date unknown'}</b>
+          </div>
+          <p class="file-name">${esc(pendingRestoreName)}</p>
+        </div>
+
+        ${now.students === 0 && now.sessions === 0 ? `
+          <!-- The new-phone case, and the common one. There is nothing to
+               lose here, so it must not be dressed up as a danger. -->
+          <div class="notice">
+            <b>Nothing here to replace.</b>
+            This app is empty on this phone, so restoring only puts the
+            file's records in.
+          </div>
+        ` : `
+          <div class="notice danger">
+            <b>This replaces everything in the app.</b>
+            The ${now.students} ${now.students === 1 ? 'student' : 'students'} and
+            ${now.sessions} ${now.sessions === 1 ? 'lesson' : 'lessons'} on this phone
+            now will be removed and the file's records put in their place.
+            You can undo this for 24 hours afterwards.
+          </div>
+        `}
+
+        ${backup.savedAt && backup.savedAt < Date.now() - 30 * 86400000 ? `
+          <p class="lock-line">
+            Note that this backup is from ${esc(dayLabel(backup.savedAt))} — anything
+            you logged after that date is not in it.
+          </p>
+        ` : ''}
+
+        ${skipped > 0 ? `
+          <p class="lock-line">
+            ${skipped} ${skipped === 1 ? 'entry' : 'entries'} in the file could not be
+            read and will be skipped. The rest restores normally.
+          </p>
+        ` : ''}
+
+        ${backup.orphans > 0 ? `
+          <p class="lock-line">
+            ${backup.orphans} ${backup.orphans === 1 ? 'lesson belongs' : 'lessons belong'}
+            to a student who is not in this file. ${backup.orphans === 1 ? 'It' : 'They'}
+            will be restored but will not appear under anyone.
+          </p>
+        ` : ''}
+      </div>
+
+      <div class="screen-actions">
+        <button class="primary ${replacing ? 'danger' : ''}" data-action="confirm-restore">
+          ${replacing ? 'Replace everything with this file' : 'Restore these records'}
+        </button>
+        <button class="secondary" data-action="cancel-restore">Cancel</button>
+      </div>
+    </div>
+  `;
+}
+
 /* ------------------------------------------------------------
    The ticking
    ------------------------------------------------------------
@@ -1244,6 +1580,25 @@ function wireUp() {
     } else if (action === 'print-summary') {
       printSummary();
 
+    // ---- backup ----
+    } else if (action === 'open-backup') {
+      pendingRestore = null;
+      go({ name: 'backup' });
+    } else if (action === 'share-backup') {
+      saveBackup({ preferShare: true });
+    } else if (action === 'download-backup') {
+      saveBackup({ preferShare: false });
+    } else if (action === 'pick-restore') {
+      const picker = document.getElementById('restore-file');
+      if (picker) picker.click();
+    } else if (action === 'cancel-restore') {
+      pendingRestore = null;
+      go({ name: 'backup' });
+    } else if (action === 'confirm-restore') {
+      applyRestore();
+    } else if (action === 'undo-restore') {
+      undoTheRestore();
+
     // ---- timer ----
     } else if (action === 'start-session') {
       const result = startSession(trigger.dataset.id);
@@ -1278,6 +1633,7 @@ function wireUp() {
   wireManualForm();
   wireCorrectForm();
   wireSummaryDates();
+  wireRestorePicker();
 
   const form = document.getElementById('student-form');
   if (!form) return;
@@ -1629,6 +1985,155 @@ function lockSummarised(data) {
 
   render(); // repaint so the lock notice appears
   toast(`Shared · ${result.locked} ${result.locked === 1 ? 'lesson' : 'lessons'} now locked`);
+}
+
+/* ------------------------------------------------------------
+   Backups
+   ------------------------------------------------------------ */
+
+/* Date and time in the name, so backups sort themselves in a chat
+   and a second one on the same day does not land as "file (1)". */
+function backupFilename(at) {
+  const d = new Date(at);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `tutorclock-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+       + `-${pad(d.getHours())}${pad(d.getMinutes())}.json`;
+}
+
+/**
+ * Write the backup file out, through the share sheet where possible
+ * (one tap into Telegram) and as a download otherwise.
+ *
+ * The backup is only RECORDED as taken once the file has actually
+ * left the app. Cancelling the share sheet must not mark the data
+ * safe - that is precisely the lie that would cost someone their
+ * records.
+ */
+async function saveBackup({ preferShare }) {
+  const at = Date.now();
+  const filename = backupFilename(at);
+
+  try {
+    const blob = new Blob([exportJson(at)], { type: 'application/json' });
+
+    if (preferShare && canShareFiles()) {
+      const file = new File([blob], filename, { type: 'application/json' });
+      if (navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], title: 'TutorClock backup' });
+        finishBackup(at);
+        return;
+      }
+    }
+
+    downloadBlob(blob, filename);
+    finishBackup(at);
+  } catch (err) {
+    // Dismissing the share sheet throws AbortError. Nothing was sent,
+    // so nothing is marked as backed up, and it is not an error.
+    if (err && err.name === 'AbortError') return;
+    console.error('TutorClock: backup failed', err);
+    toast('Could not make the backup file.');
+  }
+}
+
+function finishBackup(at) {
+  const result = markBackedUp(at);
+  render(); // the status and the dashboard nudge both change
+  toast(result.ok
+    ? 'Backup saved · keep that file somewhere safe'
+    : 'Backup made, but this device could not note the date.');
+}
+
+/* Read the chosen file and show what is in it. Nothing is written
+   here - the tutor sees the contents first and confirms on the next
+   screen. */
+function wireRestorePicker() {
+  const picker = document.getElementById('restore-file');
+  if (!picker) return;
+
+  picker.onchange = async () => {
+    const file = picker.files && picker.files[0];
+    if (!file) return;
+
+    // A backup of a whole year of tutoring is well under a megabyte.
+    // Anything vastly bigger is the wrong file, and reading it would
+    // just lock the phone up for a while first.
+    if (file.size > 8 * 1024 * 1024) {
+      picker.value = '';
+      toast('That file is far too big to be a TutorClock backup.');
+      return;
+    }
+
+    let text;
+    try {
+      text = await file.text();
+    } catch (err) {
+      picker.value = '';
+      console.error('TutorClock: could not read the chosen file', err);
+      toast('Could not read that file.');
+      return;
+    }
+
+    // Clear the picker either way, so choosing the same file twice
+    // still fires a change event.
+    picker.value = '';
+
+    const result = parseBackup(text);
+    if (!result.ok) {
+      toast(result.error);
+      return;
+    }
+
+    pendingRestore = result.backup;
+    pendingRestoreName = file.name;
+    go({ name: 'restore' });
+  };
+}
+
+function applyRestore() {
+  if (!pendingRestore) return;
+
+  const summary = pendingRestore.counts;
+  const result = restoreBackup(pendingRestore);
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  pendingRestore = null;
+  pendingRestoreName = '';
+
+  // Land back on the Backup screen rather than the dashboard, because
+  // that is where the undo lives. If the wrong file was just restored,
+  // the way out should be on the screen you are already looking at.
+  go({ name: 'backup' });
+  toast(`Restored ${summary.students} ${summary.students === 1 ? 'student' : 'students'}`
+      + ` and ${summary.sessions} ${summary.sessions === 1 ? 'lesson' : 'lessons'}`);
+}
+
+function undoTheRestore() {
+  const stash = stashInfo();
+  if (!stash) {
+    render();
+    toast('There is nothing to undo.');
+    return;
+  }
+
+  const sure = window.confirm(
+    'Undo the restore?\n\n'
+    + `This puts back the ${stash.students} students and ${stash.sessions} lessons `
+    + 'that were on this phone before, and removes what you restored.'
+  );
+  if (!sure) return;
+
+  const result = undoRestore();
+  if (!result.ok) {
+    toast(result.error);
+    return;
+  }
+
+  render();
+  toast('Restore undone');
 }
 
 /* Stop the timer and save the lesson. */
