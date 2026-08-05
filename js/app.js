@@ -2107,8 +2107,15 @@ function applyRestore() {
   // that is where the undo lives. If the wrong file was just restored,
   // the way out should be on the screen you are already looking at.
   go({ name: 'backup' });
-  toast(`Restored ${summary.students} ${summary.students === 1 ? 'student' : 'students'}`
-      + ` and ${summary.sessions} ${summary.sessions === 1 ? 'lesson' : 'lessons'}`);
+
+  /* The confirm screen promised an undo. If keeping the copy failed -
+     a full disk is the likely reason - say so now rather than let the
+     promise stand. The restore itself worked; only the way back did
+     not, and that is exactly the kind of thing an app quietly hides. */
+  toast(result.undoable
+    ? `Restored ${summary.students} ${summary.students === 1 ? 'student' : 'students'}`
+      + ` and ${summary.sessions} ${summary.sessions === 1 ? 'lesson' : 'lessons'}`
+    : 'Restored, but this device had no room to keep an undo copy.');
 }
 
 function undoTheRestore() {
